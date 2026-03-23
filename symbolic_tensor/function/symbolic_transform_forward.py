@@ -156,7 +156,6 @@ def symbolic_transform_forward(
         select_experience_query_indexes = select_qkv_indexes(
             experience, query_key_words, topk
         )
-        # print(f"{select_experience_query_indexes=}")
         # Record selected indexes (list of tensors, one per dim)
         flat_selected_indexes.append(select_experience_query_indexes)
 

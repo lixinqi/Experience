@@ -16,16 +16,26 @@ def _get_jaccard_similarity(a: List[str], b: List[str]) -> float:
     return len(intersection) / len(union)
 
 
-def _filter_non_empty_query_file_paths(view_dir: str) -> List[str]:
-    """Walk the view directory and return paths to all non-empty data files."""
+def _filter_last_coordinate_eq_zero(view_dir: str) -> List[str]:
+    """Walk the view directory and return paths to data files where the last coordinate is 0.
+
+    In the qkv view layout, coordinate 0 = query, 1 = key, 2 = value.
+    We only want the query files for similarity matching.
+    e.g. view_dir/0/0/data.txt (row 0, coord 0=query) is included,
+         view_dir/0/1/data.txt (row 0, coord 1=key) is excluded.
+    """
     result = []
     for root, _dirs, files in os.walk(view_dir):
         for fname in files:
             fpath = os.path.join(root, fname)
-            # Resolve symlinks to check actual content
-            real_path = os.path.realpath(fpath)
-            if os.path.isfile(real_path) and os.path.getsize(real_path) > 0:
-                result.append(fpath)
+            # Check that last coordinate directory is "0"
+            rel = os.path.relpath(fpath, view_dir)
+            parts = rel.split(os.sep)
+            # parts: [coord0, coord1, ..., coordN, filename]
+            if len(parts) >= 2 and parts[-2] == "0":
+                real_path = os.path.realpath(fpath)
+                if os.path.isfile(real_path) and os.path.getsize(real_path) > 0:
+                    result.append(fpath)
     return sorted(result)
 
 
@@ -83,8 +93,8 @@ def select_qkv_indexes(
     if not os.path.isdir(qkv_data_view_dir):
         dump_view(weight_tensor, qkv_data_view_dir, "txt")
 
-    # Find all non-empty data files in the view
-    query_file_paths = _filter_non_empty_query_file_paths(qkv_data_view_dir)
+    # Find query files (last coordinate == 0) in the view
+    query_file_paths = _filter_last_coordinate_eq_zero(qkv_data_view_dir)
 
     # Compute Jaccard similarity for each file
     similarity_values: List[float] = []
@@ -102,7 +112,7 @@ def select_qkv_indexes(
     else:
         similarity_mean = 0.0
     quarter_of_similarity_mean = similarity_mean / 4.0
-    epsilon = 0.1
+    epsilon = 0.01
     noise_std = quarter_of_similarity_mean + epsilon
 
     # Optionally add Gaussian noise for exploration
@@ -120,6 +130,7 @@ def select_qkv_indexes(
     # Pair paths with (noisy) similarities and select top-k descending
     paired: List[Tuple[str, float]] = list(zip(query_file_paths, noisy_similarities))
     paired.sort(key=lambda x: x[1], reverse=True)
+    # print("paired", paired)
     selected = paired[:topk]
     selected_paths = [path for path, _ in selected]
 
