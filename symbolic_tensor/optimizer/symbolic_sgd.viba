@@ -19,6 +19,7 @@ __init__ :=
     <- $params ParamsT
     <- $lr float # default 0.01
     <- $step_prompt Prompt # default ""
+    <- $llm_method ("coding_agent" | "raw_llm_api") # default raw_llm_api
     # inline
     <- (void <- super().__init__ <- $params <- dict[lr=$lr, step_prompt=$step_prompt])
 
@@ -30,7 +31,6 @@ step :=
     <- $slice_view Import[symbolic_tensor/tensor_util/slice_view.viba]
     <- $slice_tensor Import[symbolic_tensor/tensor_util/slice_tensor.viba]
     <- $dump_view Import[symbolic_tensor/tensor_util/dump_view.viba]
-    <- $llm_query Import[symbolic_tensor/llm_client/coding_agent_query.py].coding_agent_query
 
     # for each param_group, for each param with grad:
     <- ($lr float <- $param_group['lr'])
@@ -70,10 +70,13 @@ step :=
 
         If the gradient says "TODO" or "No change needed", leave the parameter unchanged.
     ''')
-    <- $do_for_one_element (void <- $llm_query <- $prompt <- $workspace_dir)
-    <- (void <- do_for_all <- NestList[$do_for_one_element])
+    <- ($agent_task AgentTask <- $workspace_dir <- "mutable_param_dir" <- $prompt)
+    <- ($all_tasks <- NestList[$agent_task])
+    <- (void <- Import[symbolic_tensor/llm_client/task_handler.viba] <- $all_tasks <- $llm_method)
     # copy back: from mutable dir through view symlinks to parent storage
     <- (void <- copy_back_to_storage_view <- f"{workspace_dir}/mutable_param_dir" <- $param_view)
+
+AgentTask := Import[symbolic_tensor/llm_client/agent_task.viba]
 
 zero_grad :=
     void

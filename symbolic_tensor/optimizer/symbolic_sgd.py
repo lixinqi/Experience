@@ -1,5 +1,5 @@
 import os
-import asyncio
+import shutil
 import tempfile
 import itertools
 import torch
@@ -8,13 +8,29 @@ from typing import Callable, List, Optional
 from symbolic_tensor.tensor_util.slice_view import slice_view
 from symbolic_tensor.tensor_util.slice_tensor import slice_tensor
 from symbolic_tensor.tensor_util.dump_view import dump_view
-from symbolic_tensor.llm_client.coding_agent_query import coding_agent_query
+from symbolic_tensor.llm_client.agent_task import AgentTask
+from symbolic_tensor.llm_client.task_handler import TaskHandler
 
 
 def _scalar_slice_indices(shape: torch.Size) -> List[List[int]]:
     """Generate all coordinate tuples for iterating over each scalar element."""
     ranges = [range(s) for s in shape]
     return [list(coord) for coord in itertools.product(*ranges)]
+
+
+def _build_nested_result(flat_results: list, shape: List[int]):
+    """Reshape a flat list of results into a nested list matching the given shape."""
+    if not shape:
+        return flat_results[0]
+    if len(shape) == 1:
+        return flat_results
+    chunk_size = 1
+    for s in shape[1:]:
+        chunk_size *= s
+    return [
+        _build_nested_result(flat_results[i * chunk_size:(i + 1) * chunk_size], shape[1:])
+        for i in range(shape[0])
+    ]
 
 
 def _copy_back_to_storage_view(mutable_dir: str, view_tensor: torch.Tensor) -> None:
@@ -77,8 +93,8 @@ class SymbolicSGD(torch.optim.Optimizer):
         step_prompt: Optional context prompt for the LLM during step.
     """
 
-    def __init__(self, params, lr: float = 0.01, step_prompt: str = ""):
-        defaults = dict(lr=lr, step_prompt=step_prompt)
+    def __init__(self, params, lr: float = 0.01, step_prompt: str = "", llm_method: str = "raw_llm_api"):
+        defaults = dict(lr=lr, step_prompt=step_prompt, llm_method=llm_method)
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -100,6 +116,7 @@ class SymbolicSGD(torch.optim.Optimizer):
         for group in self.param_groups:
             lr = group["lr"]
             step_prompt = group["step_prompt"]
+            llm_method = group["llm_method"]
 
             for param in group["params"]:
                 if param.grad is None:
@@ -117,6 +134,8 @@ class SymbolicSGD(torch.optim.Optimizer):
                     continue
 
                 coords_list = _scalar_slice_indices(param.size())
+                flat_tasks: List[AgentTask] = []
+                flat_copyback_info = []
 
                 for coords in coords_list:
                     int_slices = [c for c in coords]
@@ -129,41 +148,45 @@ class SymbolicSGD(torch.optim.Optimizer):
                     # Get coefficient for signal strength
                     grad_coeff = grad[tuple(coords)].item()
 
-                    with tempfile.TemporaryDirectory() as workspace_dir:
-                        grad_view_dir = os.path.join(workspace_dir, "const_grad_view")
-                        param_dir = os.path.join(workspace_dir, "mutable_param_dir")
+                    workspace_dir = tempfile.mkdtemp()
+                    grad_view_dir = os.path.join(workspace_dir, "const_grad_view")
+                    param_dir = os.path.join(workspace_dir, "mutable_param_dir")
 
-                        # Dump const grad view (what should change)
-                        dump_view(grad_view, grad_view_dir, "txt")
-                        # Dump mutable param copy (LLM modifies in-place)
-                        dump_view(param_value, param_dir, "txt")
+                    # Dump const grad view (what should change)
+                    dump_view(grad_view, grad_view_dir, "txt")
+                    # Dump mutable param copy (LLM modifies in-place)
+                    dump_view(param_value, param_dir, "txt")
 
-                        prompt = (
-                            "You are a parameter updater for a symbolic optimizer.\n\n"
-                            f"{step_prompt}\n\n"
-                            "The gradient describes how the parameter should change.\n"
-                            f"The update strength (learning_rate * |gradient_coefficient|) is {lr * abs(grad_coeff):.4f}.\n"
-                            "Higher values mean the gradient signal is stronger — apply changes more confidently.\n"
-                            "Lower values mean subtle adjustments.\n\n"
-                            f"Read the gradient (how to change) at \"{grad_view_dir}\".\n"
-                            f"Apply the suggested changes to the current parameter at \"{param_dir}\".\n"
-                            "Modify the parameter text in-place. Do not add commentary, just update the text.\n\n"
-                            "If the gradient says \"TODO\" or \"No change needed\", leave the parameter unchanged.\n"
-                        )
+                    prompt = (
+                        "You are a parameter updater for a symbolic optimizer.\n\n"
+                        f"{step_prompt}\n\n"
+                        "The gradient describes how the parameter should change.\n"
+                        f"The update strength (learning_rate * |gradient_coefficient|) is {lr * abs(grad_coeff):.4f}.\n"
+                        "Higher values mean the gradient signal is stronger — apply changes more confidently.\n"
+                        "Lower values mean subtle adjustments.\n\n"
+                        f"Read the gradient (how to change) at \"{grad_view_dir}\".\n"
+                        f"Apply the suggested changes to the current parameter at \"{param_dir}\".\n"
+                        "Modify the parameter text in-place. Do not add commentary, just update the text.\n\n"
+                        "If the gradient says \"TODO\" or \"No change needed\", leave the parameter unchanged.\n"
+                    )
 
-                        env_backup = os.environ.pop("CLAUDECODE", None)
-                        try:
-                            async def _run_query():
-                                async for _ in coding_agent_query(prompt=prompt, cwd=workspace_dir, allowed_tools=["Read", "Edit", "Write"]):
-                                    pass
+                    flat_tasks.append(AgentTask(
+                        workspace_dir=workspace_dir,
+                        output_relative_dir="mutable_param_dir",
+                        prompt=prompt,
+                    ))
+                    flat_copyback_info.append((param_dir, param_view))
 
-                            asyncio.run(_run_query())
-                        finally:
-                            if env_backup is not None:
-                                os.environ["CLAUDECODE"] = env_backup
+                # Build nested task list matching param shape and dispatch
+                all_tasks = _build_nested_result(flat_tasks, list(param.size()))
+                TaskHandler()(all_tasks, llm_method)
 
-                        # Copy back from mutable dir through view symlinks to parent
-                        _copy_back_to_storage_view(param_dir, param_view)
+                # Copy back results and cleanup
+                for param_dir, param_view in flat_copyback_info:
+                    _copy_back_to_storage_view(param_dir, param_view)
+
+                for task in flat_tasks:
+                    shutil.rmtree(task.workspace_dir, ignore_errors=True)
 
         return loss
 
@@ -270,59 +293,63 @@ if __name__ == "__main__":
         run_test("grad text is TODO", read_storage(exp.grad, 0) == "TODO")
 
     # Test 5: Full forward -> backward -> step
-    print("Test 5: Full training step (forward -> backward -> step)")
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_tensor = make_tensor(["Hello world in English"], tmpdir)
+    for method in ["coding_agent", "raw_llm_api"]:
+        print(f"Test 5: Full training step (llm_method={method})")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_tensor = make_tensor(["Hello world in English"], tmpdir)
 
-        experience_data = [
-            ["greeting\nhello\nworld", "Hello world in English", "Bonjour le monde en francais"],
-            ["farewell\ngoodbye", "Goodbye in English", "Au revoir en francais"],
-        ]
-        experience_tensor = make_tensor(experience_data, tmpdir)
-        experience_tensor.requires_grad_(True)
+            experience_data = [
+                ["greeting\nhello\nworld", "Hello world in English", "Bonjour le monde en francais"],
+                ["farewell\ngoodbye", "Goodbye in English", "Au revoir en francais"],
+            ]
+            experience_tensor = make_tensor(experience_data, tmpdir)
+            experience_tensor.requires_grad_(True)
 
-        optimizer = SymbolicSGD([experience_tensor], lr=1.0,
-            step_prompt="You are updating translation experience entries (query keywords, key text, value text).")
+            optimizer = SymbolicSGD([experience_tensor], lr=1.0,
+                step_prompt="You are updating translation experience entries (query keywords, key text, value text).",
+                llm_method=method)
 
-        # Read experience before
-        exp_val_before = read_storage(experience_tensor, 2)  # value of first entry
-        print(f"  experience[0].value before: {repr(exp_val_before[:80])}")
+            # Read experience before
+            exp_val_before = read_storage(experience_tensor, 2)  # value of first entry
+            print(f"  experience[0].value before: {repr(exp_val_before[:80])}")
 
-        # Forward
-        output, selected_indexes = symbolic_transform_forward(
-            input_tensor, experience_tensor,
-            forward_prompt="Translate the English text to French.",
-            topk=2,
-        )
+            # Forward
+            output, selected_indexes = symbolic_transform_forward(
+                input_tensor, experience_tensor,
+                forward_prompt="Translate the English text to French.",
+                topk=2,
+                llm_method=method,
+            )
 
-        # Backward with a quality signal
-        grad_output = make_tensor(
-            ["The translation should use formal French: 'Bonjour le monde' -> 'Bonjour au monde'"],
-            tmpdir,
-        )
-        grad_output.data.fill_(1.0)
+            # Backward with a quality signal
+            grad_output = make_tensor(
+                ["The translation should use formal French: 'Bonjour le monde' -> 'Bonjour au monde'"],
+                tmpdir,
+            )
+            grad_output.data.fill_(1.0)
 
-        grad_input, grad_experience = symbolic_transform_backward(
-            grad_output, input_tensor, output, experience_tensor,
-            selected_experience_qkv_indexes_list=selected_indexes,
-            forward_prompt="Translate the English text to French.",
-            topk=2,
-        )
+            grad_input, grad_experience = symbolic_transform_backward(
+                grad_output, input_tensor, output, experience_tensor,
+                selected_experience_qkv_indexes_list=selected_indexes,
+                forward_prompt="Translate the English text to French.",
+                topk=2,
+                llm_method=method,
+            )
 
-        # Assign grad to experience tensor
-        experience_tensor.grad = grad_experience
+            # Assign grad to experience tensor
+            experience_tensor.grad = grad_experience
 
-        # Check grad text before step
-        grad_val_text = read_storage(grad_experience, 2)
-        print(f"  grad_experience[0].value: {repr(grad_val_text[:80])}")
+            # Check grad text before step
+            grad_val_text = read_storage(grad_experience, 2)
+            print(f"  grad_experience[0].value: {repr(grad_val_text[:80])}")
 
-        # Step
-        optimizer.step()
+            # Step
+            optimizer.step()
 
-        # Check experience after
-        exp_val_after = read_storage(experience_tensor, 2)
-        print(f"  experience[0].value after: {repr(exp_val_after[:80])}")
-        run_test("experience text updated", exp_val_after != exp_val_before)
-        run_test("experience coeff updated", experience_tensor.data[0, 0].item() != 1.0)
+            # Check experience after
+            exp_val_after = read_storage(experience_tensor, 2)
+            print(f"  experience[0].value after: {repr(exp_val_after[:80])}")
+            run_test("experience text updated", exp_val_after != exp_val_before)
+            run_test("experience coeff updated", experience_tensor.data[0, 0].item() != 1.0)
 
     print("\nAll tests completed.")
