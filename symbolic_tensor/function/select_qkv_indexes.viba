@@ -6,6 +6,7 @@ select_qkv_indexes :=
     <- $weight_tensor Experience[Symbolic[torch.Tensor]]
     <- $query_key_words list[str]
     <- $topk int
+    <- $random_noise bool # default True.  False in test case
     # inline
     <- ($original_tensor_dir str <- f"{weight_tensor.st_relative_to}/{weight_tensor.st_tensor_uid}")
     <- $dump_view Import[tensor_util/dump_view]
@@ -13,5 +14,9 @@ select_qkv_indexes :=
     <- (list[$query_file_path str] <- filter_non_empty_query_file_path <- f"{original_tensor_dir}/qkv_data_view")
     <- ($query_file_key_words list[str] <- split_with_newline <- get_file_content <- $query_file_path)
     <- ($similarity float <- get_jaccard_distance <- $query_key_words <- $query_file_key_words)
-    <- ($selected_query_file_path list[str] <- arg_top_k <- list[$query_file_path, $similarity] <- ascend_by_similarity <- $topk)
+    <- ($quarter_of_similarity_mean <- quarter <- mean <- list[$similarity])
+    <- ($noise_std float <- add <- $quarter_of_similarity_mean <- $epsilon 0.1)
+    <- ($random_noise <- $mean ($quarter_of_similarity_mean) <- $std ($noise_std))
+    <- ($slightly_random_similarity <- add <- $similarity <- $random_noise <- If[$random_noise])
+    <- ($selected_query_file_path list[str] <- arg_top_k <- list[$query_file_path, $slightly_random_similarity] <- descend_by_similarity <- $topk)
     <- ($selected_qkv_indexes <- unzip_to_tensor_list <- extract_coordinates <- $selected_query_file_path)

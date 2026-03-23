@@ -63,6 +63,7 @@ class RawLlmTaskHandler:
                         f"{packed_workspace}\n\n"
                         f"The whole task are split into several pieces, One LLMs request for one piece, "
                         f"In This request, Your output will replace the {todo_file_content_hint} placeholder in file {todo_file_path}. \n"
+                        f"Output raw text only. Do NOT wrap in markdown code fences (``` or ```lang).\n"
                         f"Do not generate unrelated content."
                     )
                     jobs.append((todo_file_path, raw_llm_prompt))

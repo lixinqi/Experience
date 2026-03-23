@@ -151,12 +151,12 @@ def symbolic_transform_forward(
         flat_index = sum(c * s for c, s in zip(coords, stride))
         batch_input_file_content = _read_file_content(input_query, flat_index)
         query_key_words = [w for w in batch_input_file_content.strip().split("\n") if w.strip()]
-
+        # print(f"{query_key_words=}")
         # Select top-k experience entries by similarity
         select_experience_query_indexes = select_qkv_indexes(
             experience, query_key_words, topk
         )
-
+        # print(f"{select_experience_query_indexes=}")
         # Record selected indexes (list of tensors, one per dim)
         flat_selected_indexes.append(select_experience_query_indexes)
 
@@ -186,7 +186,10 @@ def symbolic_transform_forward(
             f"  1) file \"<root_dir>/<experience_coordinate>.../0/data.xxx\" means query file of <experience_coordinate>...\n"
             f"  2) file \"<root_dir>/<experience_coordinate>.../1/data.xxx\" means key file of <experience_coordinate>...\n"
             f"  3) file \"<root_dir>/<experience_coordinate>.../2/data.xxx\" means value file of <experience_coordinate>...\n\n"
-            "You need read all the key => value pairs to get the experiences.\n\n"
+            "You need read all the key => value pairs to get the experiences.\n"
+            "The value files show the EXACT target format and syntax.\n"
+            "You MUST faithfully follow the syntax patterns, structure, and style from the value files.\n"
+            "Do NOT invent your own syntax or formatting — copy the patterns from the experience values.\n\n"
             f"Conducted by \"{exp_view_dir}\",\n"
             f"please translate source semantic text \"{input_view_dir}\"\n"
             f"to target semantic text \"{output_dir}\".\n\n"
