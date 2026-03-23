@@ -106,7 +106,7 @@ def symbolic_transform_backward(
     forward_prompt: str = "",
     topk: int = 16,
     llm_method: str = "raw_llm_api",
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> Tuple[Union[torch.Tensor, None], torch.Tensor]:
     """
     Backward pass of the symbolic transform.
 
@@ -135,13 +135,14 @@ def symbolic_transform_backward(
         - grad_input: Gradient w.r.t. input (same shape as input).
         - grad_experience: Gradient w.r.t. experience (same shape as experience).
     """
-    # Initialize gradient tensors with TODO text
-    grad_input = todo_tensor_like(input)
+    # Initialize gradient tensors
+    grad_input = todo_tensor_like(input) if input.requires_grad else None
     grad_experience = todo_tensor_like(experience)
 
     # ── Numeric channel (coefficient) ──
     # grad_input coefficient: pass-through copy from grad_output
-    grad_input.data.copy_(grad_output.data)
+    if input.requires_grad:
+        grad_input.data.copy_(grad_output.data)
     # grad_experience coefficient: zero-init, then scatter-add
     grad_experience.data.zero_()
 
@@ -176,8 +177,9 @@ def symbolic_transform_backward(
         scalar_output = slice_view(output, int_slices)
 
         # Slice grad_input: view (symlink) for copy-back, value (copy) for LLM to write
-        scalar_grad_input_view = slice_view(grad_input, int_slices)
-        scalar_grad_input_value = slice_tensor(grad_input, int_slices)
+        if input.requires_grad:
+            scalar_grad_input_view = slice_view(grad_input, int_slices)
+            scalar_grad_input_value = slice_tensor(grad_input, int_slices)
 
         # Pad indexes to topk
         padded_select_indexes = _pad_indexes_to_topk_with_none_experience_indexes(
@@ -208,8 +210,25 @@ def symbolic_transform_backward(
             dump_view(experience_sliced_view, experience_view_dir, "txt")
 
             # Dump mutable copies (LLM writes gradients here — no symlinks to break)
-            dump_view(scalar_grad_input_value, grad_input_dir, "txt")
+            if input.requires_grad:
+                dump_view(scalar_grad_input_value, grad_input_dir, "txt")
             dump_view(grad_experience_sliced_value, grad_experience_dir, "txt")
+
+            compute_instructions = "Compute and write:\n"
+            if input.requires_grad:
+                compute_instructions += (
+                    f"1. Input gradient in \"{grad_input_dir}\":\n"
+                    "   How should the input text change to improve the output?\n"
+                )
+            compute_instructions += (
+                f"{'2' if input.requires_grad else '1'}. Experience gradients in \"{grad_experience_dir}\":\n"
+                "   How should each experience entry (query, key, value) change to improve the output?\n"
+                "   IMPORTANT: You MUST write gradients for ALL experience entries in the directory,\n"
+                "   not just the first one. Each subdirectory corresponds to one experience entry.\n"
+                "   If an entry doesn't need changes, write 'No change needed' (not TODO).\n"
+                "   If there are existing gradients accumulated from previous iterations, merge them.\n\n"
+                "Replace ALL TODO files with computed text diffs.\n"
+            )
 
             prompt = (
                 "You are a symbolic gradient calculator for backward pass.\n\n"
@@ -227,27 +246,23 @@ def symbolic_transform_backward(
                 "  which is used for calculating similarity between inputs and experience.\n"
                 "  Key files contain source domain semantics.\n"
                 "  Value files contain target domain semantics.\n\n"
-                "Compute and write:\n"
-                f"1. Input gradient in \"{grad_input_dir}\":\n"
-                "   How should the input text change to improve the output?\n"
-                f"2. Experience gradients in \"{grad_experience_dir}\":\n"
-                "   How should each experience entry (query, key, value) change to improve the output?\n"
-                "   IMPORTANT: You MUST write gradients for ALL experience entries in the directory,\n"
-                "   not just the first one. Each subdirectory corresponds to one experience entry.\n"
-                "   If an entry doesn't need changes, write 'No change needed' (not TODO).\n"
-                "   If there are existing gradients accumulated from previous iterations, merge them.\n\n"
-                "Replace ALL TODO files with computed text diffs.\n"
+                + compute_instructions
             )
+
+            output_relative_dirs = ["mutable_grad_experience_dir"]
+            if input.requires_grad:
+                output_relative_dirs.insert(0, "mutable_grad_input_dir")
 
             agent_task = AgentTask(
                 workspace_dir=workspace_dir,
-                output_relative_dir=["mutable_grad_input_dir", "mutable_grad_experience_dir"],
+                output_relative_dir=output_relative_dirs,
                 prompt=prompt,
             )
             TaskHandler()([agent_task], llm_method)
 
             # Copy results back from mutable dir through view symlinks to parent storage
-            _copy_back_to_storage_view(grad_input_dir, scalar_grad_input_view)
+            if input.requires_grad:
+                _copy_back_to_storage_view(grad_input_dir, scalar_grad_input_view)
             _copy_back_to_storage_view(grad_experience_dir, grad_experience_sliced_view)
 
     return grad_input, grad_experience
@@ -343,6 +358,7 @@ if __name__ == "__main__":
         print(f"Test 5: Full backward with LLM (llm_method={method})")
         with tempfile.TemporaryDirectory() as tmpdir:
             input_tensor = make_tensor(["Hello world in English"], tmpdir)
+            input_tensor.requires_grad_(True)
             exp_data = [
                 ["greeting\nhello\nworld", "Hello world in English", "Bonjour le monde en francais"],
                 ["farewell\ngoodbye", "Goodbye in English", "Au revoir en francais"],

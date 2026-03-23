@@ -42,10 +42,12 @@ class SoleFileBatchDataLoader:
             batch.append(Path(fpath))
             if len(batch) == self.batch_size:
                 tensor = make_tensor(batch, self.root_dir, symlink=True)
+                tensor.requires_grad_(False)
                 yield tensor
                 batch = []
         if batch:
             tensor = make_tensor(batch, self.root_dir, symlink=True)
+            tensor.requires_grad_(False)
             yield tensor
 
     def __len__(self):

@@ -21,7 +21,9 @@ symbolic_transform_backward :=
     # inline
     <- ($grad_input
         <- Import[symbolic_tensor/tensor_util/todo_tensor_like.viba]
-        <- $input)
+        <- $input
+        <- If[$input.requires_grad]
+        <- Else[None])
     <- ($grad_experience
         <- Import[symbolic_tensor/tensor_util/todo_tensor_like.viba]
         <- $experience)
@@ -31,7 +33,7 @@ symbolic_transform_backward :=
 
     # ── Numeric channel (coefficient) ──
     # grad_input coefficient: pass-through copy from grad_output
-    <- ($grad_input.data <- $grad_output.data)
+    <- ($grad_input.data <- $grad_output.data <- If[$input.requires_grad])
     # grad_experience coefficient: accumulate from grad_output for each used experience
     # for each scalar element, scatter-add its grad_output coefficient
     # to the selected experience entries via padded_select_indexes
@@ -53,8 +55,8 @@ symbolic_transform_backward :=
     <- (NestList[$scalar_grad_output Symbolic[torch.Tensor]] <- NestList[$slice_view] <- $grad_output)
     <- (NestList[$scalar_input Symbolic[torch.Tensor]] <- NestList[$slice_view] <- $input)
     <- (NestList[$scalar_output Symbolic[torch.Tensor]] <- NestList[$slice_view] <- $output)
-    <- (NestList[$scalar_grad_input_view Symbolic[torch.Tensor]] <- NestList[$slice_view] <- $grad_input)
-    <- (NestList[$scalar_grad_input_value Symbolic[torch.Tensor]] <- NestList[$slice_tensor] <- $grad_input)
+    <- (NestList[$scalar_grad_input_view Symbolic[torch.Tensor]] <- NestList[$slice_view] <- $grad_input <- If[$input.requires_grad])
+    <- (NestList[$scalar_grad_input_value Symbolic[torch.Tensor]] <- NestList[$slice_tensor] <- $grad_input <- If[$input.requires_grad])
     # slice experience (const) and grad_experience (mutable) with same padded indexes
     <- ($experience_sliced_view Experience[Symbolic[torch.Tensor]]
         <- $slice_view
@@ -75,7 +77,7 @@ symbolic_transform_backward :=
     <- (void <- $dump_view <- $scalar_output <- f"{workspace_dir}/const_output_view")
     <- (void <- $dump_view <- $experience_sliced_view <- f"{workspace_dir}/const_experience_view")
     # dump mutable views (LLM writes gradients here)
-    <- (void <- $dump_view <- $scalar_grad_input_value <- f"{workspace_dir}/mutable_grad_input_dir")
+    <- (void <- $dump_view <- $scalar_grad_input_value <- f"{workspace_dir}/mutable_grad_input_dir" <- If[$input.requires_grad])
     <- (void <- $dump_view <- $grad_experience_sliced_value <- f"{workspace_dir}/mutable_grad_experience_dir")
     <- ($prompt <- '''
         You are a symbolic gradient calculator for backward pass.
@@ -110,7 +112,7 @@ symbolic_transform_backward :=
     <- ($all_tasks <- NestList[$agent_task])
     <- (void <- Import[symbolic_tensor/llm_client/task_handler.viba] <- $all_tasks <- $llm_method)
     # copy back using pre-resolved paths (bypasses broken symlinks)
-    <- (void <- copy_back_to_storage_view <- f"{workspace_dir}/mutable_grad_input_dir" <- $scalar_grad_input_view)
+    <- (void <- copy_back_to_storage_view <- f"{workspace_dir}/mutable_grad_input_dir" <- $scalar_grad_input_view <- If[$input.requires_grad])
     <- (void <- copy_back_to_storage_view <- <- f"{workspace_dir}/mutable_grad_experience_dir" <- $grad_experience_sliced_view)
 
 AgentTask := Import[symbolic_tensor/llm_client/agent_task.viba]

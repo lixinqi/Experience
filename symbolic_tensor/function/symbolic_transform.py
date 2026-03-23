@@ -76,7 +76,8 @@ class SymbolicTransform(torch.autograd.Function):
 
         # Register symbolic grads keyed by the original parameter tensor uids
         # so the optimizer can retrieve them (autograd strips st_* attrs)
-        symbolic_grad_registry.register(input.st_tensor_uid, grad_input)
+        if grad_input is not None:
+            symbolic_grad_registry.register(input.st_tensor_uid, grad_input)
         symbolic_grad_registry.register(experience.st_tensor_uid, grad_experience)
 
         # Return grads for (input, experience, forward_prompt, topk, llm_method)

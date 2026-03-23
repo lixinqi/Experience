@@ -3,7 +3,7 @@
 # each element's storage contains a symlink to the original file
 
 SoleFileBatchDataLoader :=
-    Iterable[Symbolic[torch.Tensor]]
+    Iterable[$batch Symbolic[torch.Tensor]]
     <- $root_dir str
     <- $extension (str | None)
     <- $batch_size int
@@ -12,5 +12,6 @@ SoleFileBatchDataLoader :=
     # walk root_dir, collect relative file paths filtered by extension
     # yield batches of symbolic tensors via make_tensor with symlink=True
     # each batch shape = (batch_size,), each element symlinks to original file
+    # batch.requires_grad_(False)
 
 # tests in __main__ block
