@@ -6,7 +6,7 @@ Prompt := str
 # Two-channel update: numeric coefficient SGD + symbolic text diff via LLM
 #
 # Usage:
-#   optimizer = SymbolicSGD([experience_tensor], lr=0.01, step_prompt="")
+#   optimizer = SymbolicSGD([experience_tensor], lr=0.01)
 #   optimizer.zero_grad()
 #   ... forward / backward ...
 #   optimizer.step()
@@ -17,11 +17,8 @@ __init__ :=
     void
     <- $self SymbolicSGD
     <- $params ParamsT
-    <- $lr float # default 0.01
-    <- $step_prompt Prompt # default ""
-    <- $llm_method ("coding_agent" | "raw_llm_api") # default raw_llm_api
-    # inline
-    <- (void <- super().__init__ <- $params <- dict[lr=$lr, step_prompt=$step_prompt])
+    <- $lr float # default 0.01    # inline
+    <- (void <- super().__init__ <- $params <- dict[lr=$lr])
 
 step :=
     void
@@ -34,49 +31,20 @@ step :=
 
     # for each param_group, for each param with grad:
     <- ($lr float <- $param_group['lr'])
-    <- ($step_prompt Prompt <- $param_group['step_prompt'])
-    <- ($param Symbolic[torch.Tensor] <- $param_group['params'])
-    <- ($grad Symbolic[torch.Tensor] <- $param.grad)
+    <- (list[$param Symbolic[torch.Tensor]] <- $param_group['params'])
+    <- (list[$grad Symbolic[torch.Tensor]] <- $param.grad)
 
     # ── Numeric channel ──
-    # standard SGD: param.data -= lr * grad.data
-    <- (void <- $param.data -= $lr * $grad.data)
+    <- (void <- '''param.data = (1 - lr) * param.data + lr * grad.data''')
 
     # ── Symbolic channel ──
-    # per scalar element: LLM applies text diff to param text
-    <- (NestList[$scalar_coords list[int]] <- NestList[scalar_indices] <- $param)
-    <- ($param_view Symbolic[torch.Tensor] <- $slice_view <- $param <- $scalar_coords)
-    <- ($param_value Symbolic[torch.Tensor] <- $slice_tensor <- $param <- $scalar_coords)
-    <- ($grad_view Symbolic[torch.Tensor] <- $slice_view <- $grad <- $scalar_coords)
-    <- ($grad_coeff float <- $grad.data[tuple($scalar_coords)].item())
-    <- ($workspace_dir <- TemporaryDirectory)
-    # dump const grad view (read-only: what should change)
-    <- (void <- $dump_view <- $grad_view <- f"{workspace_dir}/const_grad_view")
-    # dump mutable param copy (LLM modifies in-place)
-    <- (void <- $dump_view <- $param_value <- f"{workspace_dir}/mutable_param_dir")
-    <- ($prompt <- '''
-        You are a parameter updater for a symbolic optimizer.
+    <- (list[$storage_elem_file_ralative_path str] <- $param)
+    <- ($param_storage_root_dir str <- $param.st_relative_to <- $param.st_tensor_uid)
+    <- ($grad_storage_root_dir str <- $grad.st_relative_to <- $grad.st_tensor_uid)
+    <- ($param_elem_file_ralative_path str <- $param_storage_root_dir <- $storage_elem_file_ralative_path)
+    <- ($grad_elem_file_ralative_path str <- $grad_storage_root_dir <- $storage_elem_file_ralative_path)
+    <- (void <- '''patch -i {grad_elem_file_ralative_path} {param_elem_file_ralative_path}''')
 
-        f"{step_prompt}"
-
-        The gradient describes how the parameter should change.
-        The update strength (learning_rate * |gradient_coefficient|) is f"{lr * abs(grad_coeff):.4f}".
-        Higher values mean the gradient signal is stronger — apply changes more confidently.
-        Lower values mean subtle adjustments.
-
-        Read the gradient (how to change) at f"{workspace_dir}/const_grad_view".
-        Apply the suggested changes to the current parameter at f"{workspace_dir}/mutable_param_dir".
-        Modify the parameter text in-place. Do not add commentary, just update the text.
-
-        If the gradient says "TODO" or "No change needed", leave the parameter unchanged.
-    ''')
-    <- ($agent_task AgentTask <- $workspace_dir <- "mutable_param_dir" <- $prompt)
-    <- ($all_tasks <- NestList[$agent_task])
-    <- (void <- Import[symbolic_tensor/llm_client/task_handler.viba] <- $all_tasks <- $llm_method)
-    # copy back: from mutable dir through view symlinks to parent storage
-    <- (void <- copy_back_to_storage_view <- f"{workspace_dir}/mutable_param_dir" <- $param_view)
-
-AgentTask := Import[symbolic_tensor/llm_client/agent_task.viba]
 
 zero_grad :=
     void

@@ -1,15 +1,10 @@
 import os
-import shutil
+import subprocess
 import tempfile
 import itertools
 import torch
 from typing import Callable, List, Optional
 
-from symbolic_tensor.tensor_util.slice_view import slice_view
-from symbolic_tensor.tensor_util.slice_tensor import slice_tensor
-from symbolic_tensor.tensor_util.dump_view import dump_view
-from symbolic_tensor.llm_client.agent_task import AgentTask
-from symbolic_tensor.llm_client.task_handler import TaskHandler
 from symbolic_tensor.function import symbolic_grad_registry
 
 
@@ -19,45 +14,15 @@ def _scalar_slice_indices(shape: torch.Size) -> List[List[int]]:
     return [list(coord) for coord in itertools.product(*ranges)]
 
 
-def _build_nested_result(flat_results: list, shape: List[int]):
-    """Reshape a flat list of results into a nested list matching the given shape."""
-    if not shape:
-        return flat_results[0]
-    if len(shape) == 1:
-        return flat_results
-    chunk_size = 1
-    for s in shape[1:]:
-        chunk_size *= s
-    return [
-        _build_nested_result(flat_results[i * chunk_size:(i + 1) * chunk_size], shape[1:])
-        for i in range(shape[0])
-    ]
-
-
-def _copy_back_to_storage_view(mutable_dir: str, view_tensor: torch.Tensor) -> None:
-    """Copy LLM results from mutable workspace dir back through view tensor's symlinks."""
-    coords_list = [list(coord) for coord in itertools.product(*[range(s) for s in view_tensor.size()])]
+def _get_storage_elem_relative_paths(tensor: torch.Tensor) -> List[str]:
+    """Get all storage element relative paths (e.g., '0/data', '1/2/data') for a tensor."""
+    paths = []
+    coords_list = _scalar_slice_indices(tensor.size())
     for coords in coords_list:
-        flat_index = sum(c * s for c, s in zip(coords, view_tensor.stride()))
+        flat_index = sum(c * s for c, s in zip(coords, tensor.stride()))
         digits = list(str(flat_index))
-        view_storage_path = os.path.join(
-            view_tensor.st_relative_to,
-            view_tensor.st_tensor_uid,
-            "storage",
-            os.path.join(*digits),
-            "data",
-        )
-        real_storage_path = os.path.realpath(view_storage_path)
-        if coords:
-            coord_dirs = os.path.join(*[str(c) for c in coords])
-            mutable_file = os.path.join(mutable_dir, coord_dirs, "data.txt")
-        else:
-            mutable_file = os.path.join(mutable_dir, "data.txt")
-        if os.path.isfile(mutable_file):
-            with open(mutable_file, "r", encoding="utf-8") as f:
-                content = f.read()
-            with open(real_storage_path, "w", encoding="utf-8") as f:
-                f.write(content)
+        paths.append(os.path.join("storage", os.path.join(*digits), "data"))
+    return paths
 
 
 def _reset_grad_text_to_todo(param: torch.Tensor) -> None:
@@ -65,17 +30,9 @@ def _reset_grad_text_to_todo(param: torch.Tensor) -> None:
     grad = param.grad
     if grad is None or not hasattr(grad, "st_tensor_uid"):
         return
-    coords_list = [list(coord) for coord in itertools.product(*[range(s) for s in grad.size()])]
-    for coords in coords_list:
-        flat_index = sum(c * s for c, s in zip(coords, grad.stride()))
-        digits = list(str(flat_index))
-        storage_path = os.path.join(
-            grad.st_relative_to,
-            grad.st_tensor_uid,
-            "storage",
-            os.path.join(*digits),
-            "data",
-        )
+    root = os.path.join(grad.st_relative_to, grad.st_tensor_uid)
+    for rel_path in _get_storage_elem_relative_paths(grad):
+        storage_path = os.path.join(root, rel_path)
         real_path = os.path.realpath(storage_path)
         if os.path.isfile(real_path):
             with open(real_path, "w", encoding="utf-8") as f:
@@ -85,17 +42,16 @@ def _reset_grad_text_to_todo(param: torch.Tensor) -> None:
 class SymbolicSGD(torch.optim.Optimizer):
     """
     Symbolic SGD optimizer. Two-channel update:
-      a) Numeric (coefficient): standard SGD param.data -= lr * grad.data
-      b) Symbolic (text): LLM applies text diffs from grad to param storage
+      a) Numeric (coefficient): param.data = (1 - lr) * param.data + lr * grad.data
+      b) Symbolic (text): apply unified diff patches from grad storage to param storage
 
     Args:
         params: Iterable of parameters to optimize.
         lr: Learning rate (default: 0.01).
-        step_prompt: Optional context prompt for the LLM during step.
     """
 
-    def __init__(self, params, lr: float = 0.01, step_prompt: str = "", llm_method: str = "raw_llm_api"):
-        defaults = dict(lr=lr, step_prompt=step_prompt, llm_method=llm_method)
+    def __init__(self, params, lr: float = 0.01):
+        defaults = dict(lr=lr)
         super().__init__(params, defaults)
 
     @torch.no_grad()
@@ -103,8 +59,8 @@ class SymbolicSGD(torch.optim.Optimizer):
         """Perform a single optimization step.
 
         For each parameter with gradients:
-          1. Numeric: param.data -= lr * grad.data
-          2. Symbolic: per scalar element, LLM applies text diff to param text
+          1. Numeric: param.data = (1 - lr) * param.data + lr * grad.data
+          2. Symbolic: apply patch -i grad_file param_file for each storage element
 
         Args:
             closure: Optional closure that reevaluates the model and returns the loss.
@@ -116,8 +72,6 @@ class SymbolicSGD(torch.optim.Optimizer):
 
         for group in self.param_groups:
             lr = group["lr"]
-            step_prompt = group["step_prompt"]
-            llm_method = group["llm_method"]
 
             for param in group["params"]:
                 if param.grad is None:
@@ -133,76 +87,57 @@ class SymbolicSGD(torch.optim.Optimizer):
                         param.grad = grad
 
                 # ── Numeric channel ──
-                # standard SGD: param.data -= lr * grad.data
-                param.data.add_(grad.data, alpha=-lr)
+                # param.data = (1 - lr) * param.data + lr * grad.data
+                param.data.mul_(1.0 - lr).add_(grad.data, alpha=lr)
 
                 # ── Symbolic channel ──
-                # Skip if grad doesn't have symbolic storage
+                # Apply unified diff patches from grad storage to param storage
                 if not hasattr(grad, "st_tensor_uid"):
                     continue
 
-                coords_list = _scalar_slice_indices(param.size())
-                flat_tasks: List[AgentTask] = []
-                flat_copyback_info = []
+                param_storage_root = os.path.join(param.st_relative_to, param.st_tensor_uid)
+                grad_storage_root = os.path.join(grad.st_relative_to, grad.st_tensor_uid)
 
-                for coords in coords_list:
-                    int_slices = [c for c in coords]
+                for rel_path in _get_storage_elem_relative_paths(param):
+                    param_file = os.path.realpath(os.path.join(param_storage_root, rel_path))
+                    grad_file = os.path.realpath(os.path.join(grad_storage_root, rel_path))
 
-                    # View (symlink) for copy-back, value (copy) for LLM to modify
-                    param_view = slice_view(param, int_slices)
-                    param_value = slice_tensor(param, int_slices)
-                    grad_view = slice_view(grad, int_slices)
+                    if not os.path.isfile(grad_file):
+                        continue
 
-                    # Get coefficient for signal strength
-                    grad_coeff = grad[tuple(coords)].item()
+                    # Skip if grad is TODO or empty
+                    with open(grad_file, "r", encoding="utf-8") as f:
+                        grad_content = f.read().strip()
+                    if not grad_content or grad_content == "TODO":
+                        continue
 
-                    workspace_dir = tempfile.mkdtemp()
-                    grad_view_dir = os.path.join(workspace_dir, "const_grad_view")
-                    param_dir = os.path.join(workspace_dir, "mutable_param_dir")
+                    # Ensure param file ends with newline (patch requires it)
+                    with open(param_file, "r", encoding="utf-8") as f:
+                        param_content = f.read()
+                    if not param_content.endswith("\n"):
+                        with open(param_file, "w", encoding="utf-8") as f:
+                            f.write(param_content + "\n")
 
-                    # Dump const grad view (what should change)
-                    dump_view(grad_view, grad_view_dir, "txt")
-                    # Dump mutable param copy (LLM modifies in-place)
-                    dump_view(param_value, param_dir, "txt")
+                    # Write normalized diff to temp file (ensure trailing newline)
+                    with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False, encoding="utf-8") as pf:
+                        pf.write(grad_content if grad_content.endswith("\n") else grad_content + "\n")
+                        patch_path = pf.name
 
-                    prompt = (
-                        "You are a parameter updater for a symbolic optimizer.\n\n"
-                        f"{step_prompt}\n\n"
-                        "The gradient describes how the parameter should change.\n"
-                        f"The update strength (learning_rate * |gradient_coefficient|) is {lr * abs(grad_coeff):.4f}.\n"
-                        "Higher values mean the gradient signal is stronger — apply changes more confidently.\n"
-                        "Lower values mean subtle adjustments.\n\n"
-                        f"Read the gradient (how to change) at \"{grad_view_dir}\".\n"
-                        f"Apply the suggested changes to the current parameter at \"{param_dir}\".\n"
-                        "Modify the parameter text in-place. Do not add commentary, just update the text.\n\n"
-                        "If the gradient says \"TODO\" or \"No change needed\", leave the parameter unchanged.\n"
-                    )
-
-                    flat_tasks.append(AgentTask(
-                        workspace_dir=workspace_dir,
-                        output_relative_dir="mutable_param_dir",
-                        prompt=prompt,
-                        todo_file_content_hint="",  # match all files (params have real text, not TODO)
-                    ))
-                    flat_copyback_info.append((param_dir, param_view))
-
-                # Build nested task list matching param shape and dispatch
-                all_tasks = _build_nested_result(flat_tasks, list(param.size()))
-                TaskHandler()(all_tasks, llm_method)
-
-                # Copy back results and cleanup
-                for param_dir, param_view in flat_copyback_info:
-                    _copy_back_to_storage_view(param_dir, param_view)
-
-                for task in flat_tasks:
-                    shutil.rmtree(task.workspace_dir, ignore_errors=True)
+                    try:
+                        result = subprocess.run(
+                            ["patch", "--no-backup-if-mismatch", "-i", patch_path, param_file],
+                            capture_output=True, text=True,
+                        )
+                        if result.returncode != 0:
+                            print(f"patch failed for {param_file}: {result.stderr.strip()}")
+                    finally:
+                        os.unlink(patch_path)
 
         return loss
 
     def zero_grad(self, set_to_none: bool = True) -> None:
         """Reset gradients. If set_to_none=False, also resets grad text storage to 'TODO'."""
         if not set_to_none:
-            # Reset text storage before super().zero_grad zeros the coefficients
             for group in self.param_groups:
                 for param in group["params"]:
                     if param.grad is not None:
@@ -211,22 +146,9 @@ class SymbolicSGD(torch.optim.Optimizer):
 
 
 if __name__ == "__main__":
-    import subprocess
+    import tempfile
     from symbolic_tensor.tensor_util.make_tensor import make_tensor
     from symbolic_tensor.tensor_util.todo_tensor_like import todo_tensor_like
-    from symbolic_tensor.function.symbolic_transform_forward import symbolic_transform_forward
-    from symbolic_tensor.function.symbolic_transform_backward import symbolic_transform_backward
-
-    # Source anthropic env vars
-    result = subprocess.run(
-        ["bash", "-c", "source ~/.anthropic.sh && env"],
-        capture_output=True, text=True,
-    )
-    for line in result.stdout.splitlines():
-        if "=" in line:
-            key, _, val = line.partition("=")
-            os.environ[key] = val
-    os.environ.pop("CLAUDECODE", None)
 
     print("Running SymbolicSGD tests...\n")
 
@@ -256,13 +178,12 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmpdir:
         exp = make_tensor([["q", "k", "v"]], tmpdir)
         exp.requires_grad_(True)
-        opt = SymbolicSGD([exp], lr=0.1, step_prompt="test")
+        opt = SymbolicSGD([exp], lr=0.1)
         run_test("param_groups has 1 group", len(opt.param_groups) == 1)
         run_test("lr is 0.1", opt.param_groups[0]["lr"] == 0.1)
-        run_test("step_prompt is 'test'", opt.param_groups[0]["step_prompt"] == "test")
 
-    # Test 2: Numeric channel only (no symbolic storage on grad)
-    print("Test 2: Numeric channel (coefficient update)")
+    # Test 2: Numeric channel (coefficient update)
+    print("Test 2: Numeric channel")
     with tempfile.TemporaryDirectory() as tmpdir:
         exp = make_tensor([["q", "k", "v"]], tmpdir)
         exp.requires_grad_(True)
@@ -272,9 +193,10 @@ if __name__ == "__main__":
         exp.grad = torch.ones_like(exp) * 2.0
         orig_data = exp.data.clone()
         opt.step()
-        # param.data -= lr * grad.data => orig - 0.5 * 2.0 = orig - 1.0
-        expected = orig_data - 1.0
-        run_test("Coefficient updated", torch.allclose(exp.data, expected))
+        # param.data = (1 - 0.5) * orig + 0.5 * 2.0 = 0.5 * orig + 1.0
+        expected = 0.5 * orig_data + 1.0
+        run_test("Coefficient updated", torch.allclose(exp.data, expected),
+                 expected.tolist(), exp.data.tolist())
 
     # Test 3: zero_grad with set_to_none=True
     print("Test 3: zero_grad(set_to_none=True)")
@@ -291,7 +213,6 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as tmpdir:
         exp = make_tensor([["q", "k", "v"]], tmpdir)
         exp.requires_grad_(True)
-        # Create a symbolic grad with non-TODO text
         grad = make_tensor([["grad_q", "grad_k", "grad_v"]], tmpdir)
         grad.data.fill_(1.0)
         exp.grad = grad
@@ -301,64 +222,48 @@ if __name__ == "__main__":
         run_test("grad coeff zeroed", exp.grad.data[0, 0].item() == 0.0)
         run_test("grad text is TODO", read_storage(exp.grad, 0) == "TODO")
 
-    # Test 5: Full forward -> backward -> step
-    for method in ["coding_agent", "raw_llm_api"]:
-        print(f"Test 5: Full training step (llm_method={method})")
-        with tempfile.TemporaryDirectory() as tmpdir:
-            input_tensor = make_tensor(["Hello world in English"], tmpdir)
+    # Test 5: Symbolic channel (patch application)
+    print("Test 5: Patch application")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create param with known content
+        exp = make_tensor([["hello world"]], tmpdir)
+        exp.requires_grad_(True)
+        param_text_before = read_storage(exp, 0)
+        run_test("param before", param_text_before == "hello world")
 
-            experience_data = [
-                ["greeting\nhello\nworld", "Hello world in English", "Bonjour le monde en francais"],
-                ["farewell\ngoodbye", "Goodbye in English", "Au revoir en francais"],
-            ]
-            experience_tensor = make_tensor(experience_data, tmpdir)
-            experience_tensor.requires_grad_(True)
+        # Create grad with a unified diff that changes "hello" to "goodbye"
+        diff_content = (
+            "--- data\n"
+            "+++ data\n"
+            "@@ -1 +1 @@\n"
+            "-hello world\n"
+            "+goodbye world\n"
+        )
+        grad = make_tensor([[diff_content]], tmpdir)
+        grad.data.fill_(1.0)
+        exp.grad = grad
 
-            optimizer = SymbolicSGD([experience_tensor], lr=1.0,
-                step_prompt="You are updating translation experience entries (query keywords, key text, value text).",
-                llm_method=method)
+        opt = SymbolicSGD([exp], lr=0.5)
+        opt.step()
 
-            # Read experience before
-            exp_val_before = read_storage(experience_tensor, 2)  # value of first entry
-            print(f"  experience[0].value before: {repr(exp_val_before[:80])}")
+        param_text_after = read_storage(exp, 0)
+        run_test("param text patched", param_text_after.strip() == "goodbye world",
+                 "goodbye world", repr(param_text_after))
 
-            # Forward
-            output, selected_indexes = symbolic_transform_forward(
-                input_tensor, experience_tensor,
-                forward_prompt="Translate the English text to French.",
-                topk=2,
-                llm_method=method,
-            )
+    # Test 6: Skip TODO and empty grads
+    print("Test 6: Skip TODO grads")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        exp = make_tensor([["original text"]], tmpdir)
+        exp.requires_grad_(True)
 
-            # Backward with a quality signal
-            grad_output = make_tensor(
-                ["The translation should use formal French: 'Bonjour le monde' -> 'Bonjour au monde'"],
-                tmpdir,
-            )
-            grad_output.data.fill_(1.0)
+        grad = make_tensor([["TODO"]], tmpdir)
+        grad.data.fill_(1.0)
+        exp.grad = grad
 
-            grad_input, grad_experience = symbolic_transform_backward(
-                grad_output, input_tensor, output, experience_tensor,
-                selected_experience_qkv_indexes_list=selected_indexes,
-                forward_prompt="Translate the English text to French.",
-                topk=2,
-                llm_method=method,
-            )
+        opt = SymbolicSGD([exp], lr=0.5)
+        opt.step()
 
-            # Assign grad to experience tensor
-            experience_tensor.grad = grad_experience
-
-            # Check grad text before step
-            grad_val_text = read_storage(grad_experience, 2)
-            print(f"  grad_experience[0].value: {repr(grad_val_text[:80])}")
-
-            # Step
-            optimizer.step()
-
-            # Check experience after
-            exp_val_after = read_storage(experience_tensor, 2)
-            print(f"  experience[0].value after: {repr(exp_val_after[:80])}")
-            run_test("experience text updated", exp_val_after != exp_val_before)
-            run_test("experience coeff updated", experience_tensor.data[0, 0].item() != 1.0)
+        param_text = read_storage(exp, 0)
+        run_test("param unchanged with TODO grad", param_text == "original text")
 
     print("\nAll tests completed.")

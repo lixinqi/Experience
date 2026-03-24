@@ -64,9 +64,7 @@ if __name__ == "__main__":
         experience_tensor = make_tensor(experience_data, tmpdir)
         experience_tensor.requires_grad_(True)
 
-        optimizer = SymbolicSGD([experience_tensor], lr=1.0,
-            step_prompt="You are updating translation experience entries "
-                        "(query keywords, key text, value text).")
+        optimizer = SymbolicSGD([experience_tensor], lr=1.0)
 
         # ── First forward ──
         print("\n  === Iteration 1: Forward ===")
@@ -95,6 +93,11 @@ if __name__ == "__main__":
             topk=2,
         )
         experience_tensor.grad = grad_experience
+        print(f"{'='*40}input{'='*40}\n{input_tensor.st_pack()}")
+        print(f"{'='*40}output{'='*40}\n{output1.st_pack()}")
+        print(f"{'='*40}grad_output{'='*40}\n{grad_output.st_pack()}")
+        print(f"{'='*40}experience{'='*40}\n{experience_tensor.st_pack()}")
+        print(f"{'='*40}grad_experience{'='*40}\n{grad_experience.st_pack()}")
 
         # Print grad diffs
         for i in range(grad_experience.numel()):
