@@ -14,75 +14,61 @@ Symbolic Tensor:    ["hello world", "bonjour"]   -> text files + coefficients
 ## Architecture
 
 ```
-experience/symbolic_tensor/
-├── tensor_util/         # Low-level tensor primitives
-│   ├── make_tensor          # Create symbolic tensor from nested strings/Paths
-│   ├── make_none_tensor     # Create zero-filled symbolic tensor (placeholder)
-│   ├── empty_tensor_like    # Create empty-string-filled tensor matching shape
-│   ├── todo_tensor_like     # Create TODO-filled tensor matching shape
-│   ├── load_tensor          # Restore tensor from dumped directory
-│   ├── dump_tensor          # Serialize tensor storage + metadata
-│   ├── dump_view            # Create coordinate-based symlink views for LLM
-│   ├── slice_view           # Slice via symlinks (shared storage)
-│   ├── slice_tensor         # Slice via file copies (independent storage)
-│   ├── pack_tensor          # Pack tensor into a single string representation
-│   ├── assign_tensor        # Assign values to tensor elements by coordinates
-│   ├── get_diff_tensor      # Compute unified diff between two tensors
-│   ├── patch_tensor         # Apply patch to tensor using git apply
-│   ├── register_tensor_ops  # Register custom ops on torch.Tensor
-│   └── st_copy              # Deep copy with autograd support
-├── function/            # autograd.Function implementations
-│   ├── symbolic_transform              # Dual-channel forward/backward wrapper
-│   ├── symbolic_transform_forward      # Forward: input -> output via LLM + experience
-│   ├── symbolic_transform_backward     # Backward: compute symbolic gradients via LLM
-│   ├── select_qkv_indexes              # Jaccard similarity-based experience retrieval
-│   ├── get_input_query_tensor          # LLM-generated query keywords per element
-│   ├── get_edit_distance_ratio         # Text similarity loss (Levenshtein-based)
-│   ├── symbolic_grad_registry          # Thread-local metadata pass-through between autograd Functions
-│   └── test/                          # Benchmarks
-│       └── test_transform_method_time_comparison  # coding_agent vs raw_llm_api benchmark
-├── module/              # torch.nn.Module wrappers
-│   └── symbolic_transform  # SymbolicTransformModule (like nn.Linear for text)
-├── optimizer/           # Training optimizers
-│   └── symbolic_sgd     # Patch-based SGD: diff experience, apply patches
-├── llm_client/          # LLM backend interface (two methods)
+experience/
+├── symbolic_tensor/         # Core tensor operations
+│   ├── tensor_util/             # Low-level tensor primitives
+│   │   ├── make_tensor          # Create symbolic tensor from nested strings/Paths
+│   │   ├── make_none_tensor     # Create zero-filled symbolic tensor (placeholder)
+│   │   ├── empty_tensor_like    # Create empty-string-filled tensor matching shape
+│   │   ├── todo_tensor_like     # Create TODO-filled tensor matching shape
+│   │   ├── load_tensor          # Restore tensor from dumped directory
+│   │   ├── dump_tensor          # Serialize tensor storage + metadata
+│   │   ├── dump_view            # Create coordinate-based symlink views for LLM
+│   │   ├── slice_view           # Slice via symlinks (shared storage)
+│   │   ├── slice_tensor         # Slice via file copies (independent storage)
+│   │   ├── pack_tensor          # Pack tensor into a single string representation
+│   │   ├── assign_tensor        # Assign values to tensor elements by coordinates
+│   │   ├── get_diff_tensor      # Compute unified diff between two tensors
+│   │   ├── patch_tensor         # Apply patch to tensor using git apply
+│   │   ├── register_tensor_ops  # Register custom ops on torch.Tensor
+│   │   └── st_copy              # Deep copy with autograd support
+│   ├── function/                # autograd.Function implementations
+│   │   ├── symbolic_transform              # Dual-channel forward/backward wrapper
+│   │   ├── symbolic_transform_forward      # Forward: input -> output via LLM + experience
+│   │   ├── symbolic_transform_backward     # Backward: compute symbolic gradients via LLM
+│   │   ├── select_qkv_indexes              # Jaccard similarity-based experience retrieval
+│   │   ├── get_input_query_tensor          # LLM-generated query keywords per element
+│   │   ├── get_edit_distance_ratio         # Text similarity loss (Levenshtein-based)
+│   │   └── symbolic_grad_registry          # Thread-local metadata pass-through between autograd Functions
+│   ├── module/                  # torch.nn.Module wrappers
+│   │   └── symbolic_transform  # SymbolicTransformModule (like nn.Linear for text)
+│   ├── optimizer/               # Training optimizers
+│   │   └── symbolic_sgd        # Patch-based SGD: diff experience, apply patches
+│   └── data_loader/             # Dataset utilities
+│       └── sole_file_batch_data_loader  # Load files into symbolic tensors
+├── llm_client/              # LLM backend interface (two methods)
 │   ├── task_handler              # Dispatches tasks to the selected LLM method
 │   ├── agent_task                # AgentTask dataclass: unit of work for LLM
 │   ├── coding_agent_query        # Async Claude Agent SDK wrapper
 │   ├── coding_agent_task_handler # Dispatches to Claude coding agent (file system access)
 │   ├── raw_llm_query             # Async OpenAI-compatible API call
-│   ├── raw_llm_task_handler      # Dispatches via raw LLM API (prompt-based)
-│   └── pack_dir                  # Packs directory into single string for raw LLM context
-├── sparse_util/         # Sparse coordinate utilities
+│   └── raw_llm_task_handler      # Dispatches via raw LLM API (prompt-based)
+├── sparse_util/             # Sparse coordinate utilities
 │   ├── group_random_select                                   # Random selection within groups
 │   ├── convert_nested_list_coordinates_to_pairs_coordinates # Nested list <-> flat coordinate pairs
 │   └── transpose_pairs_coordinates                          # Transpose sparse coordinate matrices
-├── fs_util/             # File system utilities
-│   └── get_nested_list_file_pathes  # Enumerate file paths matching nested list structure
-├── data_loader/         # Dataset utilities
-│   └── sole_file_batch_data_loader  # Load files into symbolic tensors
-└── example/             # End-to-end example
+├── fs_util/                 # File system utilities
+│   ├── get_nested_list_file_pathes  # Enumerate file paths matching nested list structure
+│   └── pack_dir                      # Packs directory into single string for raw LLM context
+├── test/                    # Integration tests and benchmarks
+│   ├── test_gain_symbolic_sgd                # End-to-end training step test
+│   └── test_transform_method_time_comparison # coding_agent vs raw_llm_api benchmark
+└── example/                 # End-to-end example
     └── naive_symbolic_transform_model/
-        ├── train.py      # Training loop: Python -> Viba translation
+        ├── train.py      # Training loop
         ├── model.py      # NaiveModel wrapping SymbolicTransformModule
         └── dataset/      # 12 Python/Viba code pairs
 ```
-
-## Viba: The Spec Language
-
-Each `.py` module has a companion `.viba` file that serves as a **design-time specification** written in the Viba pattern-matching language. These `.viba` files describe the intended logic in a declarative style — they are not executed at runtime, but guide implementation and regeneration.
-
-Viba syntax highlights:
-- `<-` for variable binding / return
-- `$var` for variable references with type annotations
-- `:=` for type/function definitions
-- Sum types with `|` for branching
-- `Match[condition -> value, ...]` for pattern matching
-- `Import[...]` for referencing other modules
-- `Object * field type` for dataclass-like structs
-- `# inline` for inlining a function body
-
-The `.viba` files in `example/naive_symbolic_transform_model/dataset/` are actual Viba code samples used as **translation targets** in the training demo.
 
 ## Dual-Channel Gradient System
 
@@ -112,23 +98,25 @@ Both methods are dispatched through `TaskHandler`, which takes a list of `AgentT
 An **Experience** is a symbolic tensor of shape `[N, 3]` where each row is a `(query, key, value)` triple:
 - **Query** (position 0): Semantic keywords (one per line) used for Jaccard similarity retrieval
 - **Key** (position 1): Source domain content (e.g., Python code)
-- **Value** (position 2): Target domain content (e.g., Viba code)
-
-Formally defined in `tensor_util/experience.viba`:
-```viba
-Experience[Tensor] := $tensor Tensor * Constraints[
-    Assert[$tensor.shape[-1] == 3],
-    IsQueryFile[$tensor[..., 0]],
-    IsKeyFile[$tensor[..., 1]],
-    IsValueFile[$tensor[..., 2]],
-]
-```
+- **Value** (position 2): Target domain content (e.g., code in another language)
 
 Experience acts as the learnable "weight" of the model. It starts empty and is populated during training — the backward pass computes diffs against the expected output, and the optimizer applies patches to experience entries via `git apply`.
 
 ## Demo: Python to Viba Translation
 
-This example trains a model from scratch to translate Python code into Viba. The experience starts **empty** and is learned entirely during training.
+This example trains a model from scratch to translate Python code into **Viba** — a novel domain-specific language (DSL) invented for this project. Viba is a pattern-matching language that does not exist in the training corpus of any existing LLM. This makes it a rigorous test: the LLM must learn to generate syntactically and semantically correct code in a language it has never seen before, purely from the experience entries built up during training.
+
+### Why Viba?
+
+Existing LLMs have been trained on billions of lines of code in Python, JavaScript, Haskell, etc. Translating between these languages tests whether the model can *recall* patterns from its training data. Viba eliminates this confound — no existing LLM has ever seen Viba code, so any correct translation demonstrates genuine *generalization* driven by the experience mechanism, not retrieval from pre-training.
+
+Viba features:
+- `<-` for variable binding / return
+- `$var` for variable references with type annotations
+- `:=` for type/function definitions
+- Sum types with `|` for branching (replacing if/elif/else)
+- `Match[condition -> value, ...]` for pattern matching
+- List comprehensions: `list[$doubled <- $item * 2]`
 
 ### 1. Dataset
 
