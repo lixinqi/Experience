@@ -104,7 +104,7 @@ def main():
             print(f"  [{i}] {name}.py -> {name}.viba")
 
         # ── Experience (empty, learned during training) ──
-        experience_tensor = make_tensor([[""] * 3 for _ in range(n)], tmpdir)
+        experience_tensor = make_tensor([[""] * 3 for _ in range(2 * n)], tmpdir)
 
         # ── Model & optimizer ──
         model = NaiveModel(forward_prompt=FORWARD_PROMPT, topk=1)

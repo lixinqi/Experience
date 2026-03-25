@@ -27,13 +27,14 @@ def _get_diff(actual_content: str, expected_content: str) -> str:
     """Run diff -u on two content strings via temp files. Returns unified diff output."""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".expected", delete=False) as f_exp, \
          tempfile.NamedTemporaryFile(mode="w", suffix=".actual", delete=False) as f_act:
-        f_exp.write(expected_content)
+        f_exp.write(expected_content if expected_content.endswith("\n") else expected_content + "\n")
         f_exp.flush()
-        f_act.write(actual_content)
+        f_act.write(actual_content if actual_content.endswith("\n") else actual_content + "\n")
         f_act.flush()
 
         result = subprocess.run(
-            ["diff", "-u", f_exp.name, f_act.name],
+            ["diff", "-u", "--label", "expected", "--label", "actual",
+             f_exp.name, f_act.name],
             capture_output=True,
             text=True,
         )

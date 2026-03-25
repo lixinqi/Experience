@@ -318,12 +318,22 @@ def symbolic_transform_backward_grad_experience(
         {
             "name": "key",
             "last_dim_slice": slice(1, 2, None),
-            "prompt_suffix": "Please generate key file(s) with same semantic domain of inputs.\n",
+            "prompt_suffix": (
+                "You are writing KEY files. "
+                "Key content must be in the SAME language/format as the INPUT files (source domain). "
+                "Copy or adapt content from the input files. "
+                "Do NOT use the output/target format for key files.\n"
+            ),
         },
         {
             "name": "value",
             "last_dim_slice": slice(2, 3, None),
-            "prompt_suffix": "Please generate value file(s) with same semantic domain of outputs.\n",
+            "prompt_suffix": (
+                "You are writing VALUE files. "
+                "Value content must be in the SAME language/format as the OUTPUT files (target domain). "
+                "Copy or adapt content from the output files. "
+                "Do NOT use the input/source format for value files.\n"
+            ),
         },
     ]
 
@@ -373,22 +383,22 @@ def symbolic_transform_backward_grad_experience(
                 "You are a symbolic gradient calculator for backward pass.\n\n"
                 f"{forward_prompt}\n\n"
                 "During forward pass, the input was translated to output using experience entries.\n"
-                "Now given the output gradient (how output should change), compute gradients for\n"
-                "input and experience.\n\n"
+                "Now compute better experience entries to improve future translations.\n\n"
                 "Context (read-only):\n"
-                f"- Output gradient (text diff): \"{grad_output_view_dir}\"\n"
                 f"- Original input: \"{input_view_dir}\"\n"
                 f"- Original output: \"{output_view_dir}\"\n"
+                f"- Output gradient (how output should change, in unified diff format — DO NOT copy this diff text): \"{grad_output_view_dir}\"\n"
                 f"- Experience entries used during forward: \"{experience_view_dir}\"\n"
                 "  where .../0/data.xxx = query, .../1/data.xxx = key, .../2/data.xxx = value\n"
-                "- Each line in query files only contains one summary key word for current experience.\n"
-                "  which used for calculate similarity between inputs and experience.\n"
-                "- Key files contain source domain semantics.\n"
-                "- Value files contain target domain semantics.\n\n"
+                "- Key files contain source domain content (same domain as input).\n"
+                "- Value files contain target domain content (same domain as output).\n\n"
+                "IMPORTANT: You must write actual content, NOT diff/patch text.\n"
+                "- Key content should be in the SAME language/format as the input files.\n"
+                "- Value content should be in the SAME language/format as the output files.\n"
+                "- NEVER write diff headers (--- +++ @@) as content.\n\n"
                 "Compute and write:\n"
-                f"1. Experience gradients in \"{grad_experience_dir}\":\n"
-                "   How should each experience entry (query, key, value) change to improve the output?\n"
-                "   Notice, there maybe be multiple grad_output. You should merge them into grad_experience.\n"
+                f"1. Experience {grad_exp_type['name']} in \"{grad_experience_dir}\":\n"
+                "   Write improved experience entries that would help produce better translations.\n"
                 f"2. File \"{grad_experience_dir}/<xxx>/data\" must be a better version of \"{experience_view_dir}/<xxx>/data\"\n\n"
                 f"Replace all TODO with experience {grad_exp_type['name']} semantic files.\n\n"
                 f"{prompt_suffix}"
