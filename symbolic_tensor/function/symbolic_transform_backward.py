@@ -259,15 +259,16 @@ def symbolic_transform_backward_grad_input(
             prompt=prompt,
         )
         all_tasks.append(agent_task)
-        task_contexts.append((workspace_dir, scalar_grad_input_view, scalar_grad_input_value))
+        task_contexts.append((workspace_dir, scalar_grad_input_view, scalar_input, scalar_grad_input_value))
 
     # Batch LLM call
     if all_tasks:
         TaskHandler()(all_tasks, llm_method)
 
-    # Compute diff between view (original) and value (LLM-written), assign diff back to view
-    for workspace_dir, scalar_grad_input_view, scalar_grad_input_value in task_contexts:
-        diff = get_diff_tensor(scalar_grad_input_view, scalar_grad_input_value)
+    # Compute diff between original input and LLM-written improved version,
+    # assign diff back to grad_input view
+    for workspace_dir, scalar_grad_input_view, scalar_input, scalar_grad_input_value in task_contexts:
+        diff = get_diff_tensor(scalar_input, scalar_grad_input_value)
         assign_tensor(scalar_grad_input_view, diff)
         shutil.rmtree(workspace_dir)
 
@@ -399,15 +400,16 @@ def symbolic_transform_backward_grad_experience(
                 prompt=prompt,
             )
             all_tasks.append(agent_task)
-            task_contexts.append((workspace_dir, grad_experience_sliced_view, grad_experience_sliced_value))
+            task_contexts.append((workspace_dir, grad_experience_sliced_view, experience_sliced_view, grad_experience_sliced_value))
 
     # Batch LLM call
     if all_tasks:
         TaskHandler()(all_tasks, llm_method)
 
-    # Compute diff between view (original) and value (LLM-written), assign diff back to view
-    for workspace_dir, grad_experience_sliced_view, grad_experience_sliced_value in task_contexts:
-        diff = get_diff_tensor(grad_experience_sliced_view, grad_experience_sliced_value)
+    # Compute diff between original experience and LLM-written improved version,
+    # assign diff back to grad_experience view
+    for workspace_dir, grad_experience_sliced_view, experience_sliced_view, grad_experience_sliced_value in task_contexts:
+        diff = get_diff_tensor(experience_sliced_view, grad_experience_sliced_value)
         assign_tensor(grad_experience_sliced_view, diff)
         shutil.rmtree(workspace_dir)
 

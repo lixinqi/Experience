@@ -101,7 +101,7 @@ symbolic_transform_backward_grad_input :=
     <- ($all_tasks <- NestedList[$agent_task])
     <- (void <- Import[symbolic_tensor/llm_client/task_handler.viba] <- $all_tasks <- $llm_method)
     <- ($diff
-        <- $scalar_grad_input_view.st_get_diff
+        <- $scalar_input.st_get_diff
         <- $scalar_grad_input_value)
     <- (void <- $scalar_grad_input_view.st_assign <- $diff)
 
@@ -143,9 +143,9 @@ symbolic_transform_backward_grad_experience :=
         ''')
     <- (GradTypeTag[GradKey] = "key")
     <- (GradTypeTag[GradValue] = "value")
-    <- (LasTimeSlice[GradKey] = slice(1, 2, None))
-    <- (LasTimeSlice[GradValue] = slice(2, 3, None))
-    <- ($select_experience_indexes <- replace_last_tensor_with_slice <- LasTimeSlice[$grad_exp_type] <- $sole_grad_experience_point)
+    <- (LastDimSlice[GradKey] = slice(1, 2, None))
+    <- (LastDimSlice[GradValue] = slice(2, 3, None))
+    <- ($select_experience_indexes <- replace_last_tensor_with_slice <- LastDimSlice[$grad_exp_type] <- $sole_grad_experience_point)
     
     <- ($grad_experience
         <- Import[symbolic_tensor/tensor_util/empty_tensor_like.viba]
@@ -223,7 +223,7 @@ symbolic_transform_backward_grad_experience :=
     <- ($all_tasks <- list[GradExprTypeList[$agent_task]])
     <- (void <- Import[symbolic_tensor/llm_client/task_handler.viba] <- $all_tasks <- $llm_method)
     <- ($diff
-        <- $grad_experience_sliced_view.st_get_diff
+        <- $experience_sliced_view.st_get_diff
         <- $grad_experience_sliced_value)
     <- (void <- $grad_experience_sliced_view.st_assign <- $diff)
 

@@ -1,6 +1,7 @@
 import os
 import itertools
 import subprocess
+import tempfile
 import torch
 from typing import List
 
@@ -20,6 +21,22 @@ def _get_storage_path(tensor: torch.Tensor, coordinates: List[int]) -> str:
         "data",
     )
     return os.path.realpath(path)
+
+
+def _ensure_newline(path: str) -> str:
+    """Return a temp file path with content of *path* guaranteed to end with newline.
+
+    If the original file already ends with a newline, returns the original path
+    (no temp file created). Otherwise returns a new temp path (caller must unlink).
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    if content.endswith("\n"):
+        return path
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+    tmp.write(content + "\n")
+    tmp.close()
+    return tmp.name
 
 
 def get_diff_tensor(lvalue: torch.Tensor, rvalue: torch.Tensor) -> torch.Tensor:
@@ -46,12 +63,22 @@ def get_diff_tensor(lvalue: torch.Tensor, rvalue: torch.Tensor) -> torch.Tensor:
         coords = list(coords)
         lvalue_path = _get_storage_path(lvalue, coords)
         rvalue_path = _get_storage_path(rvalue, coords)
-        result = subprocess.run(
-            ["diff", "-u", "--label", "data", "--label", "data",
-             lvalue_path, rvalue_path],
-            capture_output=True, text=True,
-        )
-        diffs.append(result.stdout)
+        # Normalize to newline-terminated temps so diffs never contain
+        # '\ No newline at end of file' — keeps patches clean for `patch` cmd
+        lv_norm = _ensure_newline(lvalue_path)
+        rv_norm = _ensure_newline(rvalue_path)
+        try:
+            result = subprocess.run(
+                ["diff", "-u", "--label", "data", "--label", "data",
+                 lv_norm, rv_norm],
+                capture_output=True, text=True,
+            )
+            diffs.append(result.stdout)
+        finally:
+            if lv_norm != lvalue_path:
+                os.unlink(lv_norm)
+            if rv_norm != rvalue_path:
+                os.unlink(rv_norm)
 
     # Reshape diffs into nested list matching original shape
     shape = list(lvalue.size())

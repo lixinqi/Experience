@@ -1,10 +1,10 @@
 patch_tensor :=
     void
     <- $lvalue Symbolic[torch.Tensor]
-    <- $rvalue Symboilc[torch.Tensor]
+    <- $rvalue Symbolic[torch.Tensor]
     # inline
     <- Assert[ShapeEquals[$lvalue, $rvalue]]
-    <- $get_index (int <- $tensor Symboilc[torch.Tensor] <- $coordinates list[int] <- tensor.strides)
+    <- $get_index (int <- $tensor Symbolic[torch.Tensor] <- $coordinates list[int] <- tensor.strides)
     <- (list[$coordinates list[int]] <- get_coordinates_list <- $lvalue.shape)
     <- ($lvalue_index int <- $get_index <- $lvalue <- $coordinates)
     <- ($rvalue_index int <- $get_index <- $rvalue <- $coordinates)

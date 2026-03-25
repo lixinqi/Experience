@@ -21,7 +21,7 @@ def _get_storage_path(tensor: torch.Tensor, coordinates: List[int]) -> str:
     return os.path.realpath(path)
 
 
-def patch_tensor(lvalue: torch.Tensor, rvalue: torch.Tensor) -> None:
+def patch_tensor(lvalue: torch.Tensor, rvalue: torch.Tensor) -> dict:
     """Apply unified diffs from rvalue onto lvalue's storage in-place.
 
     For each coordinate, rvalue contains a unified diff patch which is applied
@@ -30,10 +30,15 @@ def patch_tensor(lvalue: torch.Tensor, rvalue: torch.Tensor) -> None:
     Args:
         lvalue: Target symbolic tensor whose files will be patched.
         rvalue: Patch symbolic tensor containing unified diffs.
+
+    Returns:
+        Stats dict with keys: applied, rejected, fuzzed, skipped, rej_files.
     """
     assert lvalue.shape == rvalue.shape, (
         f"Shape mismatch: lvalue {list(lvalue.shape)} != rvalue {list(rvalue.shape)}"
     )
+
+    stats = {"applied": 0, "rejected": 0, "fuzzed": 0, "skipped": 0, "rej_files": 0}
 
     coords_list = list(itertools.product(*[range(s) for s in lvalue.size()]))
     for coords in coords_list:
@@ -41,28 +46,56 @@ def patch_tensor(lvalue: torch.Tensor, rvalue: torch.Tensor) -> None:
         lvalue_path = _get_storage_path(lvalue, coords)
         rvalue_path = _get_storage_path(rvalue, coords)
 
-        # Read the patch content; skip if empty (no diff)
+        # Read the patch content; skip if empty or TODO
         with open(rvalue_path) as f:
             patch_content = f.read()
-        if not patch_content.strip():
+        stripped = patch_content.strip()
+        if not stripped or stripped == "TODO":
+            stats["skipped"] += 1
             continue
+
+        # Ensure target file ends with newline (patch requires it)
+        with open(lvalue_path, "r", encoding="utf-8") as f:
+            lvalue_content = f.read()
+        if not lvalue_content.endswith("\n"):
+            with open(lvalue_path, "w", encoding="utf-8") as f:
+                f.write(lvalue_content + "\n")
+
+        # Clean up .rej files from previous iterations
+        rej_path = lvalue_path + ".rej"
+        if os.path.isfile(rej_path):
+            os.unlink(rej_path)
+
+        # Normalize patch content to end with newline
+        normalized = patch_content if patch_content.endswith("\n") else patch_content + "\n"
 
         # Write patch to a temp file and apply
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".patch", delete=False
         ) as pf:
-            pf.write(patch_content)
+            pf.write(normalized)
             patch_file = pf.name
 
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["patch", "--no-backup-if-mismatch", "--fuzz=3",
                  "-i", patch_file, lvalue_path],
                 capture_output=True, text=True,
-                check=True,
             )
+            if result.returncode != 0:
+                stats["rejected"] += 1
+            else:
+                stats["applied"] += 1
+                if "fuzz" in result.stdout.lower():
+                    stats["fuzzed"] += 1
         finally:
             os.unlink(patch_file)
+
+        rej_path_after = lvalue_path + ".rej"
+        if os.path.isfile(rej_path_after):
+            stats["rej_files"] += 1
+
+    return stats
 
 
 if __name__ == "__main__":

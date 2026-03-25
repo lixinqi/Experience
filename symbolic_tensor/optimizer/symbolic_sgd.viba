@@ -42,13 +42,8 @@ step :=
 
     # ── Symbolic channel ──
     <- ($kv_param <- $slice_view <- $param <- $kv_points)
-    <- (list[$storage_elem_file_ralative_path str] <- $kv_points)
-    <- ($param_storage_root_dir str <- $param.st_relative_to <- $param.st_tensor_uid)
-    <- ($grad_storage_root_dir str <- $grad.st_relative_to <- $grad.st_tensor_uid)
-    <- ($param_elem_file_ralative_path str <- $param_storage_root_dir <- $storage_elem_file_ralative_path)
-    <- ($grad_elem_file_ralative_path str <- $grad_storage_root_dir <- $storage_elem_file_ralative_path)
-    <- (void <- remove_rej_file <- f"{param_elem_file_ralative_path}.rej")
-    <- (void <- '''patch --no-backup-if-mismatch --fuzz=3 -i {grad_elem_file_ralative_path} {param_elem_file_ralative_path}''')
+    <- ($kv_param_grad <- $slice_view <- $param.grad <- $kv_points)
+    <- (void <- $kv_param.st_patch <- $kv_param_grad)
     
     # update queries
     <- ($kv_queries

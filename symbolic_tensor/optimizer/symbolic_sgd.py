@@ -8,6 +8,7 @@ from typing import Callable, List, Optional, Union
 
 from symbolic_tensor.function import symbolic_grad_registry
 from symbolic_tensor.tensor_util.slice_view import slice_view
+from symbolic_tensor.tensor_util.patch_tensor import patch_tensor
 from symbolic_tensor.fs_util.get_nested_list_file_pathes import get_nested_list_file_pathes
 
 
@@ -17,39 +18,17 @@ def _scalar_slice_indices(shape: torch.Size) -> List[List[int]]:
     return [list(coord) for coord in itertools.product(*ranges)]
 
 
-def _get_storage_elem_relative_paths(tensor: torch.Tensor) -> List[str]:
-    """Get all storage element relative paths (e.g., '0/data', '1/2/data') for a tensor."""
-    paths = []
-    coords_list = _scalar_slice_indices(tensor.size())
-    for coords in coords_list:
-        flat_index = sum(c * s for c, s in zip(coords, tensor.stride()))
-        digits = list(str(flat_index))
-        paths.append(os.path.join("storage", os.path.join(*digits), "data"))
-    return paths
-
-
-def _get_storage_real_path(tensor: torch.Tensor, coords: List[int]) -> str:
-    """Get the real storage file path for coordinates."""
-    flat_index = sum(c * s for c, s in zip(coords, tensor.stride()))
-    digits = list(str(flat_index))
-    path = os.path.join(
-        tensor.st_relative_to,
-        tensor.st_tensor_uid,
-        "storage",
-        os.path.join(*digits),
-        "data",
-    )
-    return os.path.realpath(path)
-
-
 def _reset_grad_text_to_todo(param: torch.Tensor) -> None:
     """Reset all text storage files of param.grad to 'TODO'."""
     grad = param.grad
     if grad is None or not hasattr(grad, "st_tensor_uid"):
         return
     root = os.path.join(grad.st_relative_to, grad.st_tensor_uid)
-    for rel_path in _get_storage_elem_relative_paths(grad):
-        storage_path = os.path.join(root, rel_path)
+    coords_list = _scalar_slice_indices(grad.size())
+    for coords in coords_list:
+        flat_index = sum(c * s for c, s in zip(coords, grad.stride()))
+        digits = list(str(flat_index))
+        storage_path = os.path.join(root, "storage", os.path.join(*digits), "data")
         real_path = os.path.realpath(storage_path)
         if os.path.isfile(real_path):
             with open(real_path, "w", encoding="utf-8") as f:
@@ -157,62 +136,13 @@ class SymbolicSGD(torch.optim.Optimizer):
                 kv_param = slice_view(param, kv_points)
                 kv_grad = slice_view(grad, kv_points)
 
-                param_storage_root = os.path.join(param.st_relative_to, param.st_tensor_uid)
-                grad_storage_root = os.path.join(grad.st_relative_to, grad.st_tensor_uid)
-
-                for rel_path in _get_storage_elem_relative_paths(kv_param):
-                    param_file = os.path.realpath(os.path.join(
-                        kv_param.st_relative_to, kv_param.st_tensor_uid, rel_path
-                    ))
-                    grad_file = os.path.realpath(os.path.join(
-                        kv_grad.st_relative_to, kv_grad.st_tensor_uid, rel_path
-                    ))
-
-                    if not os.path.isfile(grad_file):
-                        continue
-
-                    # Skip if grad is TODO or empty
-                    with open(grad_file, "r", encoding="utf-8") as f:
-                        grad_content = f.read().strip()
-                    if not grad_content or grad_content == "TODO":
-                        self._last_step_stats["skipped"] += 1
-                        continue
-
-                    # Ensure param file ends with newline (patch requires it)
-                    with open(param_file, "r", encoding="utf-8") as f:
-                        param_content = f.read()
-                    if not param_content.endswith("\n"):
-                        with open(param_file, "w", encoding="utf-8") as f:
-                            f.write(param_content + "\n")
-
-                    # Clean up .rej files from previous iterations
-                    rej_path = param_file + ".rej"
-                    if os.path.isfile(rej_path):
-                        os.unlink(rej_path)
-
-                    # Write normalized diff to temp file
-                    with tempfile.NamedTemporaryFile(mode="w", suffix=".patch", delete=False, encoding="utf-8") as pf:
-                        pf.write(grad_content if grad_content.endswith("\n") else grad_content + "\n")
-                        patch_path = pf.name
-
-                    try:
-                        result = subprocess.run(
-                            ["patch", "--no-backup-if-mismatch", "--fuzz=3", "-i", patch_path, param_file],
-                            capture_output=True, text=True,
-                        )
-                        if result.returncode != 0:
-                            print(f"patch failed for {param_file}: {result.stderr.strip()}")
-                            self._last_step_stats["rejected"] += 1
-                        else:
-                            self._last_step_stats["applied"] += 1
-                            if "fuzz" in result.stdout.lower():
-                                self._last_step_stats["fuzzed"] += 1
-                    finally:
-                        os.unlink(patch_path)
-
-                    rej_path_after = param_file + ".rej"
-                    if os.path.isfile(rej_path_after):
-                        self._last_step_stats["rej_files"] += 1
+                # Apply unified diff patches from grad onto param via st_patch
+                stats = patch_tensor(kv_param, kv_grad)
+                self._last_step_stats["applied"] += stats["applied"]
+                self._last_step_stats["rejected"] += stats["rejected"]
+                self._last_step_stats["fuzzed"] += stats["fuzzed"]
+                self._last_step_stats["skipped"] += stats["skipped"]
+                self._last_step_stats["rej_files"] += stats["rej_files"]
 
                 # ── Update queries from key+value content ──
                 self._update_queries(param, unique_row_points)
