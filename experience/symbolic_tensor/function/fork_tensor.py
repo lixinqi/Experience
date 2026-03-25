@@ -11,6 +11,7 @@ from experience.symbolic_tensor.tensor_util.get_diff_tensor import get_diff_tens
 from experience.symbolic_tensor.tensor_util.slice_view import slice_view
 from experience.symbolic_tensor.tensor_util.slice_tensor import slice_tensor
 from experience.symbolic_tensor.tensor_util.dump_view import dump_view
+from experience.symbolic_tensor.function import symbolic_grad_registry
 from experience.llm_client.agent_task import AgentTask
 from experience.llm_client.task_handler import TaskHandler
 
@@ -142,6 +143,85 @@ def fork_tensor_backward(
         shutil.rmtree(workspace_dir)
 
     return grad_input
+
+
+class ForkTensor(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ctx,
+        input: torch.Tensor,
+        num_outputs: int = 2,
+        forward_prompt: str = "",
+        llm_method: str = "raw_llm_api",
+    ) -> Tuple[torch.Tensor, ...]:
+        outputs = fork_tensor_forward(input, num_outputs)
+
+        # Save tensors for backward
+        ctx.save_for_backward(input, *outputs)
+        # save_for_backward strips custom attributes; preserve them manually
+        ctx.st_attrs = {}
+        ctx.st_attrs["input"] = {
+            attr: getattr(input, attr)
+            for attr in ("st_relative_to", "st_tensor_uid")
+            if hasattr(input, attr)
+        }
+        for i, out in enumerate(outputs):
+            ctx.st_attrs[f"output_{i}"] = {
+                attr: getattr(out, attr)
+                for attr in ("st_relative_to", "st_tensor_uid")
+                if hasattr(out, attr)
+            }
+        # Save non-tensor state
+        ctx.num_outputs = num_outputs
+        ctx.forward_prompt = forward_prompt
+        ctx.llm_method = llm_method
+
+        return tuple(outputs)
+
+    @staticmethod
+    def backward(ctx, *grad_outputs):
+        saved = ctx.saved_tensors
+        input = saved[0]
+        outputs = list(saved[1:])
+
+        # Restore custom st_* attributes stripped by save_for_backward
+        for attr, val in ctx.st_attrs["input"].items():
+            setattr(input, attr, val)
+        for i, out in enumerate(outputs):
+            for attr, val in ctx.st_attrs[f"output_{i}"].items():
+                setattr(out, attr, val)
+
+        # Resolve symbolic gradients from registry
+        # (autograd strips st_* attrs when passing gradients between Function nodes)
+        resolved_grad_outputs = []
+        for i, grad_out in enumerate(grad_outputs):
+            symbolic_grad = symbolic_grad_registry.pop(outputs[i].st_tensor_uid)
+            if symbolic_grad is not None:
+                resolved_grad_outputs.append(symbolic_grad)
+            elif not hasattr(grad_out, "st_relative_to"):
+                symbolic_grad_out = todo_tensor_like(outputs[i])
+                symbolic_grad_out.data.copy_(grad_out.data)
+                resolved_grad_outputs.append(symbolic_grad_out)
+            else:
+                resolved_grad_outputs.append(grad_out)
+
+        grad_input = fork_tensor_backward(
+            resolved_grad_outputs,
+            input,
+            outputs,
+            forward_prompt=ctx.forward_prompt,
+            llm_method=ctx.llm_method,
+        )
+
+        # Register symbolic grad keyed by input tensor uid
+        if grad_input is not None:
+            symbolic_grad_registry.register(input.st_tensor_uid, grad_input)
+
+        # Return grads for (input, num_outputs, forward_prompt, llm_method)
+        return grad_input, None, None, None
+
+
+fork_tensor = ForkTensor.apply
 
 
 if __name__ == "__main__":
