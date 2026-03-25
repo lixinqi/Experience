@@ -63,6 +63,25 @@ def _get_nonzero_points(grad: torch.Tensor) -> List[torch.Tensor]:
     return list(nz)
 
 
+def _read_storage_text(param: torch.Tensor, row_index: int) -> str:
+    """Read the key (dim 1) storage text for a given row index."""
+    if not hasattr(param, "st_tensor_uid"):
+        return ""
+    # flat index for (row_index, 1) in shape [N, 3] → row_index * 3 + 1
+    stride = param.stride()
+    flat_index = row_index * stride[0] + 1 * stride[1]
+    digits = list(str(flat_index))
+    path = os.path.join(
+        param.st_relative_to, param.st_tensor_uid,
+        "storage", os.path.join(*digits), "data",
+    )
+    real_path = os.path.realpath(path)
+    if os.path.isfile(real_path):
+        with open(real_path, encoding="utf-8") as f:
+            return f.read()
+    return ""
+
+
 class SymbolicSGD(torch.optim.Optimizer):
     """
     Symbolic SGD optimizer. Two-channel update:
@@ -72,19 +91,25 @@ class SymbolicSGD(torch.optim.Optimizer):
       c) Query auto-update: after patching key+value, derive query content from
          updated key+value file text (sort unique lines, join with newline).
 
+    Append-only mode (append_only=True):
+      - Non-empty entries are immutable. Gradients only fill empty slots.
+      - Scale num_experiences to provide more capacity for learning.
+
     Args:
         params: Iterable of parameters to optimize.
         lr: Learning rate (default: 0.01).
+        append_only: Protect non-empty entries from being overwritten (default: False).
     """
 
-    def __init__(self, params, lr: float = 0.01):
+    def __init__(self, params, lr: float = 0.01, append_only: bool = False):
         defaults = dict(lr=lr)
         super().__init__(params, defaults)
+        self.append_only = append_only
 
     @torch.no_grad()
     def step(self, closure: Optional[Callable] = None):
         """Perform a single optimization step."""
-        self._last_step_stats = {"applied": 0, "rejected": 0, "fuzzed": 0, "skipped": 0, "rej_files": 0}
+        self._last_step_stats = {"applied": 0, "rejected": 0, "fuzzed": 0, "skipped": 0, "rej_files": 0, "protected": 0}
 
         loss = None
         if closure is not None:
@@ -128,6 +153,24 @@ class SymbolicSGD(torch.optim.Optimizer):
                     unique_row_points = [unique_rows[:, d] for d in range(unique_rows.shape[1])]
                 else:
                     unique_row_points = []
+
+                # ── Append-only filtering ──
+                # Skip rows where entry is non-empty (already learned)
+                if self.append_only and unique_row_points:
+                    keep_mask = []
+                    for idx in range(len(unique_row_points[0])):
+                        row_idx = unique_row_points[0][idx].item()
+                        content = _read_storage_text(param, row_idx)
+                        if not content.strip():
+                            keep_mask.append(True)
+                        else:
+                            keep_mask.append(False)
+                            self._last_step_stats["protected"] += 1
+                    if not any(keep_mask):
+                        continue
+                    if not all(keep_mask):
+                        mask_t = torch.tensor(keep_mask)
+                        unique_row_points = [t[mask_t] for t in unique_row_points]
 
                 # kv_points: unique rows × key+value slice (1:3)
                 kv_points = list(unique_row_points) + [slice(1, 3, None)]
