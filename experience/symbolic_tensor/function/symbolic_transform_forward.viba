@@ -5,7 +5,7 @@ Prompt := str
 symbolic_transform_forward :=
     ($output Symboilc[torch.Tensor], $selected_experience_qkv_indexes_list NestList[list[torch.Tensor[int]]])
     <- $input Symboilc[torch.Tensor]
-    <- $experience Experience[Symbolic[torch.Tensor]]
+    <- $experience ExperienceTensor[Symbolic[torch.Tensor]]
     <- $forward_prompt Prompt # default ""
     <- $topk int # default 16
     <- $llm_method ("coding_agent" | "raw_llm_api") # default raw_llm_api
@@ -30,7 +30,7 @@ symbolic_transform_forward :=
         <- $topk)
     <- ($selected_experience_qkv_indexes_list <- NestList[$select_experience_query_indexes])
     <- ($select_experience_indexes <- replace_last_tensor_with_full_slice <- $select_experience_query_indexes)
-    <- ($experience_sliced_view Experience[Symbolic[torch.Tensor]]
+    <- ($experience_sliced_view ExperienceTensor[Symbolic[torch.Tensor]]
         <- $slice_view
         <- $experience
         <- $select_experience_indexes)

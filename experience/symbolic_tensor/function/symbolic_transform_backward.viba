@@ -8,12 +8,12 @@ Prompt := str
 # ctx saves: input, output, experience, selected_experience_qkv_indexes_list, forward_prompt, topk
 
 symbolic_transform_backward :=
-    ($grad_input Symbolic[torch.Tensor], $grad_experience Experience[Symbolic[torch.Tensor]])
+    ($grad_input Symbolic[torch.Tensor], $grad_experience ExperienceTensor[Symbolic[torch.Tensor]])
     <- $grad_output Symbolic[torch.Tensor]
     # saved from forward ctx
     <- $input Symbolic[torch.Tensor]
     <- $output Symbolic[torch.Tensor]
-    <- $experience Experience[Symbolic[torch.Tensor]]
+    <- $experience ExperienceTensor[Symbolic[torch.Tensor]]
     <- $selected_experience_qkv_indexes_list NestedList[list[torch.Tensor[int]]]
     <- $forward_prompt Prompt # default ""
     <- $topk int # default 16
@@ -27,7 +27,7 @@ symbolic_transform_backward_grad_input :=
     # saved from forward ctx
     <- $input Symbolic[torch.Tensor]
     <- $output Symbolic[torch.Tensor]
-    <- $experience Experience[Symbolic[torch.Tensor]]
+    <- $experience ExperienceTensor[Symbolic[torch.Tensor]]
     <- $selected_experience_qkv_indexes_list NestedList[list[torch.Tensor[int]]]
     <- $forward_prompt Prompt # default ""
     <- $topk int # default 16
@@ -58,7 +58,7 @@ symbolic_transform_backward_grad_input :=
     <- (NestedList[$scalar_output Symbolic[torch.Tensor]] <- NestedList[$slice_view] <- $output)
     <- (NestedList[$scalar_grad_input_view Symbolic[torch.Tensor]] <- NestedList[$slice_view] <- $grad_input <- If[$input.requires_grad])
     <- (NestedList[$scalar_grad_input_value Symbolic[torch.Tensor]] <- NestedList[$slice_tensor] <- $grad_input <- If[$input.requires_grad])
-    <- ($experience_sliced_view Experience[Symbolic[torch.Tensor]]
+    <- ($experience_sliced_view ExperienceTensor[Symbolic[torch.Tensor]]
         <- $slice_view
         <- $experience
         <- $select_experience_indexes)
@@ -106,12 +106,12 @@ symbolic_transform_backward_grad_input :=
     <- (void <- $scalar_grad_input_view.st_assign <- $diff)
 
 symbolic_transform_backward_grad_experience :=
-    $grad_experience Experience[Symbolic[torch.Tensor]]
+    $grad_experience ExperienceTensor[Symbolic[torch.Tensor]]
     <- $grad_output Symbolic[torch.Tensor]
     # saved from forward ctx
     <- $input Symbolic[torch.Tensor]
     <- $output Symbolic[torch.Tensor]
-    <- $experience Experience[Symbolic[torch.Tensor]]
+    <- $experience ExperienceTensor[Symbolic[torch.Tensor]]
     <- NestedList[select_experience_query_indexes list[torch.Tensor[int]]]
     <- $forward_prompt Prompt # default ""
     <- $topk int # default 16
@@ -165,11 +165,11 @@ symbolic_transform_backward_grad_experience :=
     <- ($input_sliced_view Symbolic[torch.Tensor] <- $slice_view <- $input <- $multi_grad_output_points)
     <- ($output_sliced_view Symbolic[torch.Tensor] <- $slice_view <- $output <- $multi_grad_output_points)
     # slice experience (const) and grad_experience (mutable) with same padded indexes
-    <- ($experience_sliced_view Experience[Symbolic[torch.Tensor]]
+    <- ($experience_sliced_view ExperienceTensor[Symbolic[torch.Tensor]]
         <- $slice_view
         <- $experience
         <- $select_experience_indexes)
-    <- ($grad_experience_sliced_view Experience[Symbolic[torch.Tensor]]
+    <- ($grad_experience_sliced_view ExperienceTensor[Symbolic[torch.Tensor]]
         <- $slice_view
         <- $grad_experience
         <- $select_experience_indexes)
@@ -177,7 +177,7 @@ symbolic_transform_backward_grad_experience :=
         <- $grad_experience_sliced_view.st_assign
         <- Import[experience/symbolic_tensor/tensor_util/todo_tensor_like.viba]
         <- $grad_experience_sliced_view)
-    <- ($grad_experience_sliced_value Experience[Symbolic[torch.Tensor]]
+    <- ($grad_experience_sliced_value ExperienceTensor[Symbolic[torch.Tensor]]
         <- $slice_tensor
         <- $grad_experience
         <- $select_experience_indexes)

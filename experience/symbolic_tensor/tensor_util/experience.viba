@@ -1,4 +1,4 @@
-Experience[Tensor] := $tensor Tensor * Constraints[
+ExperienceTensor := $tensor Tensor * Constraints[
         Assert[$tensor.shape[-1] == 3],
         IsCompatibleWith[Tensor, Symbolic[torch.Tensor]],
         IsQueryFile[$tensor[..., 0]],

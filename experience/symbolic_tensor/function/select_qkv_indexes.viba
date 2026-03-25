@@ -1,9 +1,9 @@
 
-Experience := DeclareOnlyForLLMsComprehension[symbolic_tensor/tensor_util/experience.viba]
+ExperienceTensor := DeclareOnlyForLLMsComprehension[symbolic_tensor/tensor_util/experience.viba]
 
 select_qkv_indexes :=
     $selected_qkv_indexes list[torch.Tensor[int]]
-    <- $weight_tensor Experience[Symbolic[torch.Tensor]]
+    <- $weight_tensor ExperienceTensor[Symbolic[torch.Tensor]]
     <- $query_key_words list[str]
     <- $topk int
     <- $random_noise bool # default True.  False in test case
