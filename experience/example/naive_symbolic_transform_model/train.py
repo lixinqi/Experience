@@ -82,14 +82,13 @@ def print_patch_summary(patch_stats):
     print(f"  Applied with fuzz: {total['fuzzed']}")
     print(f"  Rejected: {total['rejected']}")
     print(f"  Skipped (TODO/empty): {total['skipped']}")
-    print(f"  Protected (low loss): {total['protected']}")
     print(f"  .rej files: {total['rej_files']}")
     if attempts > 0:
         print(f"  Success rate: {total['applied'] / attempts * 100:.1f}%")
     print()
     for i, s in enumerate(patch_stats, 1):
         print(f"  Iter {i}: applied={s['applied']} rejected={s['rejected']} "
-              f"fuzzed={s['fuzzed']} skipped={s['skipped']} protected={s['protected']} rej={s['rej_files']}")
+              f"fuzzed={s['fuzzed']} skipped={s['skipped']} rej={s['rej_files']}")
 
 
 def main():
@@ -110,7 +109,7 @@ def main():
         # ── Model & optimizer ──
         model = NaiveModel(forward_prompt=FORWARD_PROMPT, topk=1)
         model.load_experience(experience_tensor)
-        optimizer = SymbolicSGD(model.parameters(), lr=1.0, append_only=True)
+        optimizer = SymbolicSGD(model.parameters(), lr=1.0)
 
         print(f"\nExperience: {list(experience_tensor.shape)}")
         print(f"Input:      {list(input_tensor.shape)}")
@@ -154,6 +153,16 @@ def main():
             else:
                 print("    (no symbolic gradient)")
 
+            # Append-only: zero out grad for non-empty experience rows
+            # so the optimizer skips them (it only patches nonzero-grad rows)
+            exp = model.transform.experience
+            for row_idx in range(exp.shape[0]):
+                key_text = read_storage(exp, row_idx * 3 + 1)  # dim 1 = key
+                if key_text.strip():
+                    symbolic_grad = symbolic_grad_registry.peek(exp.st_tensor_uid)
+                    if symbolic_grad is not None:
+                        symbolic_grad.data[row_idx] = 0.0
+
             # Optimizer step
             print("\n  [Step]")
             optimizer.step()
@@ -161,7 +170,7 @@ def main():
             stats = optimizer.get_last_step_stats()
             patch_stats.append(stats)
             print(f"    Patches: applied={stats['applied']} rejected={stats['rejected']} "
-                  f"fuzzed={stats['fuzzed']} skipped={stats['skipped']} protected={stats['protected']}")
+                  f"fuzzed={stats['fuzzed']} skipped={stats['skipped']}")
 
             # Experience snapshot
             print("    Experience after step:")
