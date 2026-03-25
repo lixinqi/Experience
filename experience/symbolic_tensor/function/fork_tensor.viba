@@ -1,0 +1,72 @@
+fork_tensor_forward :=
+    list[$ret_elem Symbolic[torch.Tensor]]
+    <- $input Symbolic[torch.Tensor]
+    <- $num_outputs int # default 2
+    # inline
+    <- $slice_view Import[slice_view.viba]
+    <- $slices ShapeRankList[slice(None, None, None)]
+    <- (list[$i int] <- range <- $num_outputs)
+    <- ($ret_elem <- $slice_view <- $input <- $slices <- $i)
+
+fork_tensor_backward :=
+    $grad_input Symbolic[torch.Tensor]
+    <- $grad_outputs list[Symbolic[torch.Tensor]]
+    <- $input Symbolic[torch.Tensor]
+    <- $outputs list[Symbolic[torch.Tensor]]
+    <- $llm_method ("coding_agent" | "raw_llm_api") # default raw_llm_api
+    # inline
+    <- EarlyReturn[IfNot[$input.requires_grad], $grad_input <- None]
+    <- $slice_view Import[experience/symbolic_tensor/tensor_util/slice_view.viba]
+    <- $slice_tensor Import[experience/symbolic_tensor/tensor_util/slice_tensor.viba]
+    <- $dump_view Import[experience/symbolic_tensor/tensor_util/dump_view.viba]
+
+    <- ($grad_input <- Import[experience/symbolic_tensor/tensor_util/todo_tensor_like.viba] <- $input)
+
+    # Numeric channel
+    <- ($grad_input.data <- sum <- $grad_outputs)
+
+    # Symbolic channel
+    <- (NestedList[$scalar_grad_outputs list[Symbolic[torch.Tensor]]] <- NestedList[$slice_view] <- $grad_outputs)
+    <- (NestedList[$scalar_outputs list[Symbolic[torch.Tensor]]] <- NestedList[$slice_view] <- $outputs)
+    <- (NestedList[$scalar_input Symbolic[torch.Tensor]] <- NestedList[$slice_view] <- $input)
+    <- (NestedList[$scalar_grad_input_view Symbolic[torch.Tensor]] <- NestedList[$slice_view] <- $grad_input)
+    <- (NestedList[$scalar_grad_input_value Symbolic[torch.Tensor]] <- NestedList[$slice_tensor] <- $grad_input)
+
+    <- ($workspace_dir <- TemporaryDirectory)
+    <- (void <- $dump_view <- $scalar_grad_outputs <- f"{workspace_dir}/const_grad_outputs_view")
+    <- (void <- $dump_view <- $scalar_input <- f"{workspace_dir}/const_input_view")
+    <- (void <- $dump_view <- $scalar_outputs <- f"{workspace_dir}/const_outputs_view")
+    <- (void <- $dump_view <- $scalar_grad_input_value <- f"{workspace_dir}/mutable_grad_input_dir" <- If[$input.requires_grad])
+    <- ($prompt <- '''
+        You are a symbolic gradient collector for backward pass.
+
+        f"{forward_prompt}"
+
+        During forward pass, the input was replicated to multi identical outputs.
+        Now given the output gradients (how output should change), merge gradient for
+        input.
+
+        Context (read-only):
+        - Output gradients (text diff): f"{workspace_dir}/const_grad_outputs_view"
+        - Original input: f"{workspace_dir}/const_input_view"
+        - Original outputs: f"{workspace_dir}/const_outputs_view"
+
+        Compute and write:
+        1. Input gradient in f"{workspace_dir}/mutable_grad_input_dir":
+           How should the input text change to improve the output?
+        2. File f"{workspace_dir}/mutable_grad_input_dir/<xxx>/data" must be a better version of f"{workspace_dir}/const_input_view/<xxx>/data"
+
+        Replace all TODO with source semantic files.
+    ''')
+    <- ($agent_task AgentTask <- $workspace_dir <- "mutable_grad_input_dir" <- $prompt)
+    <- ($all_tasks <- NestedList[$agent_task])
+    <- (void <- Import[experience/llm_client/task_handler.viba] <- $all_tasks <- $llm_method)
+    <- ($diff
+        <- $scalar_input.st_get_diff
+        <- $scalar_grad_input_value)
+    <- (void <- $scalar_grad_input_view.st_assign <- $diff)
+
+SymbolicTransform := torch.autograd.Function[
+    fork_tensor_forward,
+    fork_tensor_backward,
+]

@@ -30,3 +30,9 @@ def st_file_paths(tensor):
     return get_nested_list_file_pathes(tensor)
 
 torch.Tensor.st_file_paths = st_file_paths
+
+def st_fork(tensor, num_outputs=2):
+    from experience.symbolic_tensor.function.fork_tensor import fork_tensor
+    return fork_tensor(tensor, num_outputs=num_outputs)
+
+torch.Tensor.st_fork = st_fork

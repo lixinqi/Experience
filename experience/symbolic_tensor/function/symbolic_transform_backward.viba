@@ -46,7 +46,7 @@ symbolic_transform_backward_grad_input :=
     # ── Numeric channel (coefficient) ──
     # grad_input coefficient: pass-through copy from grad_output
     <- ($grad_input.data <- $grad_output.data <- If[$input.requires_grad])
-    <- (NestedList[$scalar_grad_output_coeff float <- $grad_output.data])
+    <- (NestedList[$scalar_grad_output_coeff float] <- $grad_output.data)
     <- (NestedList[$select_experience_query_indexes list[torch.Tensor[int]]]
         <- $selected_experience_qkv_indexes_list)
     <- ($select_experience_indexes <- replace_last_tensor_with_full_slice <- $select_experience_query_indexes)
