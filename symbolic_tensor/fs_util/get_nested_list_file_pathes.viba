@@ -1,0 +1,6 @@
+get_nested_list_file_pathes :=
+    $ret NestedList[pathlib.Path]
+    <- $tensor Symbolic[torch.Tensor]
+    <- $get_index (int <- $tensor Symboilc[torch.Tensor] <- $coordinates list[int] <- tensor.strides)
+    <- ($coordinates_list list[list[int]] <- $tensor.shape)
+    <- ($ret <- $coordinates_list <- $get_index)
