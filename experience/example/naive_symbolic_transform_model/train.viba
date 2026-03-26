@@ -1,11 +1,22 @@
-main :=
-    void
+OutputPromptCallable := Import[experience/symbolic_tensor/function/symbolic_transform.viba].OutputPromptCallable
+RetrievalMethodCallable := Import[experience/symbolic_tensor/function/symbolic_transform.viba].RetrievalMethodCallable
+
+auto_train :=
+    ($losses list[float], dict[$log_type str, $log_content str])
+    <- $num_experience int # default 24
+    <- $topk int # default 1
+    <- $forward_prompt OutputPromptCallable # default None
+    <- $lr float # default 1.0
+    <- $llm_model str # default None
+    <- $retrieval_method RetrievalMethodCallable # default None
+    <- $num_iterations int # default 5
+    <- $batch_size int # default 12
     # inline
     <- Import[experience/example/naive_symbolic_transform_model/model.py].NaiveModel
     <- $task_prompt "Translate Python To Viba"
-    <- Import[experience/symbolic_tensor/data_loader/sole_file_batch_data_loader.py]
     <- Import[experience/symbolic_tensor/function/get_edit_distance_ratio.py]
     <- Import[experience/symbolic_tensor/optimizer/symbolic_sgd.py]
-    # NaiveModel() uses default prompts (all None -> defaults)
-    # 5 iterations, validate loss convergence.
-    # save loss of each iteration to /tmp/loss.log
+    # NaiveModel(forward_prompt, task_prompt, topk, retrieval_method, llm_env)
+    # llm_env built from llm_model if not None
+    # training loop with batch slicing
+    # returns (losses, logs_dict)
