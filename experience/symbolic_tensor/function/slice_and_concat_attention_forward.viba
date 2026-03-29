@@ -1,0 +1,33 @@
+slice_and_concat_attention_forward :=
+    Symbolic[torch.Tensor]
+    <- $input Symbolic[torch.Tensor[($batch, $seq_len)]]
+    <- $attention_mask torch.Tensor[($batch, $seq_len, $seq_len), $dtype bool]
+    # inline
+    <- ($final_output
+        <- Import[experience/symbolic_tensor/tensor_util/none_tensor_like.viba]
+        <- $input)
+    <- ($token_mask <- {torch.any on last dim} <- $attention_mask)
+    <- ($chosen_token_points list[torch.Tensor] <- nonzero <- $token_mask)
+    <- $slice_view Import[experience/symbolic_tensor/tensor_util/slice_view.viba]
+    <- ($output
+        <- $slice_view
+        <- $final_output
+        <- $chosen_token_points)
+    <- (list[($batch_i int, $seq_j int)] <- zip <- $chosen_token_points)
+    <- ($mask_ij_points list[torch.Tensor[Index]]
+        <- ({batch_index_tensor + batch_i}, seq_index_tensor)
+        <- ($batch_index_tensor, $seq_index_tensor)
+        <- nonzero
+        <- {attention_mask[batch_i:batch_i+1, seq_j, :]})
+    <- ($ij_sliced_input Symbolic[torch.Tensor]
+        <- $slice_view
+        <- $input
+        <- $mask_ij_points)
+    <- ($concated_ij_sliced_input Symbolic[torch.Tensor[()]]
+        <- {
+            fetch all storage files from ij_sliced_input.
+            join files with sep "\n".
+            save the joint str into a scalar symbolic tensor.
+        })
+    <- ($scalar_output_view <- $slice_view <- $output <- $mask_ij_points)
+    <- (void <- scalar_output_view.st_assign <- $concated_ij_sliced_input)
