@@ -1,0 +1,10 @@
+dense_to_sparse :=
+    ($output Symbolic[torch.Tensor],
+     $indexes list[torch.Tensor[Index]],
+     $shape list[int])
+    <- $input Symbolic[torch.Tensor]
+    <- $view bool # default False
+    # inline
+    <- nonzero
+    <- $slice_view Import[experience/symbolic_tensor/tensor_util/slice_view.viba]
+    <- $slice_tensor Import[experience/symbolic_tensor/tensor_util/slice_tensor.viba]
