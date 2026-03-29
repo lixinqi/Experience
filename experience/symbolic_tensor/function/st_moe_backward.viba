@@ -131,6 +131,25 @@ default_prompt_for_grad_exp_value :=
 
 BackwardPromptCallable := $func ($ret str <- $task_prompt str <- $workspace_dir str <- $const_grad_output_view str <- $const_input_view str <- $const_output_view str <- $const_experience_view str <- $mutable_dir str)
 
+# Sum type: detect whether input element is plain text or merged frames
+# (from st_attention output via TextMerger.pack).
+# Plain: single content string — use current single-LLM-call logic.
+# Merged: packed frames — unpack, per-frame LLM calls, repack, then diff.
+InputContentType := 
+    Oneof
+    | $content Plain[str] 
+    | $frames Merged[list[Frame]]
+
+Frame := ($index int, $coefficient float, $content str)
+
+# Per-element task context: carries data needed for post-TaskHandler refinement.
+# PlainCtx: no extra work — LLM already wrote to scalar_grad_input_value.
+# MergedCtx: needs frame metadata + per-frame grad tensors to repack.
+ElementTaskCtx :=
+    Oneof
+    | PlainCtx
+    | $merge_ctx MergedCtx[($frames list[Frame], $frame_grad_values list[Symbolic[torch.Tensor]])]
+
 st_moe_backward :=
     ($grad_input Symbolic[torch.Tensor], $grad_experience ExperienceTensor[Symbolic[torch.Tensor]])
     <- $grad_output Symbolic[torch.Tensor]
@@ -162,6 +181,7 @@ st_moe_backward_grad_input :=
     <- $topk int # default 16
     <- $llm_method ("coding_agent" | "raw_llm_api") # default raw_llm_api
     <- $llm_env dict[str, str] # default None
+    <- $text_merger Optional[CompatibleTo[TextMerger]] # default None, uses TextMerger
     # inline
     <- Notice[HasSameShape[NestedList[int], $input]]
     <- ($grad_input
@@ -181,6 +201,15 @@ st_moe_backward_grad_input :=
         <- $selected_experience_qkv_indexes_list)
     <- ($select_experience_indexes <- replace_last_tensor_with_full_slice <- $select_experience_query_indexes)
 
+    # ── Detect input content type ──
+    # When st_attention precedes st_moe, input elements are merged content
+    # (packed frames via TextMerger). Asking LLM to generate grad for the
+    # entire merged blob is impractical. Instead, detect and handle per-frame.
+    <- $kFrameMarker Import[experience/fs_util/text_merger.viba]
+    <- ($merger <- ($text_merger | TextMerger))
+    <- ($scalar_input_content str <- read_storage <- $input)
+    <- ($input_content_type InputContentType <- detect <- $scalar_input_content <- $kFrameMarker)
+
     # ── Symbolic channel (text diff) ──
     # per scalar element: slice all relevant tensors
     <- (NestedList[$scalar_grad_output Symbolic[torch.Tensor]] <- NestedList[$slice_view] <- $grad_output)
@@ -198,23 +227,103 @@ st_moe_backward_grad_input :=
     <- (void <- $dump_view <- $scalar_input <- f"{workspace_dir}/const_input_view")
     <- (void <- $dump_view <- $scalar_output <- f"{workspace_dir}/const_output_view")
     <- (void <- $dump_view <- $experience_sliced_view <- f"{workspace_dir}/const_experience_view")
-    # dump mutable views (LLM writes gradients here)
-    <- (void <- $dump_view <- $scalar_grad_input_value <- f"{workspace_dir}/mutable_grad_input_dir" <- If[$input.requires_grad])
-    <- ($prompt <- ($grad_input_prompt | default_prompt_for_grad_input)
-        <- $task_prompt
-        <- $workspace_dir
-        <- f"{workspace_dir}/const_grad_output_view"
-        <- f"{workspace_dir}/const_input_view"
-        <- f"{workspace_dir}/const_output_view"
-        <- f"{workspace_dir}/const_experience_view"
-        <- f"{workspace_dir}/mutable_grad_input_dir")
-    <- ($agent_task AgentTask <- $workspace_dir <- "mutable_grad_input_dir" <- $prompt)
-    <- ($all_tasks <- NestedList[$agent_task])
+
+    # ── Per-element mixed task construction + context ──
+    # Each element is either Plain (1 AgentTask) or Merged (list[AgentTask] for frames).
+    # Context tracks what's needed for post-TaskHandler refinement.
+
+    <- (NestedList[($sole_element_task AgentTask | $element_tasks list[AgentTask],
+                   $task_ctx ElementTaskCtx)]
+        <- { match $input_content_type }
+
+        # Case Plain: single AgentTask, no post-processing needed
+        <- ({ case Plain $content }
+            <- (void <- $dump_view <- $scalar_grad_input_value <- f"{workspace_dir}/mutable_grad_input_dir" <- If[$input.requires_grad])
+            <- ($prompt <- ($grad_input_prompt | default_prompt_for_grad_input)
+                <- $task_prompt
+                <- $workspace_dir
+                <- f"{workspace_dir}/const_grad_output_view"
+                <- f"{workspace_dir}/const_input_view"
+                <- f"{workspace_dir}/const_output_view"
+                <- f"{workspace_dir}/const_experience_view"
+                <- f"{workspace_dir}/mutable_grad_input_dir")
+            <- ($sole_element_task AgentTask <- $workspace_dir <- "mutable_grad_input_dir" <- $prompt)
+            <- ($task_ctx <- PlainCtx))
+
+        # Case Merged: list[AgentTask] — one per frame
+        <- ({ case Merged $frames }
+            <- (list[$frame_workspace_dir] <- list[TemporaryDirectory])
+            <- (list[$frame_content str] <- $frames.content)
+            <- (list[$frame_input_tensor Symbolic[torch.Tensor]] <- list[make_tensor] <- $frame_content)
+            <- (list[$frame_grad_value Symbolic[torch.Tensor]] <- list[todo_tensor_like] <- $frame_input_tensor)
+            # dump per-frame const + mutable
+            <- (void <- list[$dump_view] <- $frame_input_tensor <- f"{frame_workspace_dir}/const_frame_input")
+            <- (void <- $dump_view <- $scalar_grad_output <- f"{frame_workspace_dir}/const_grad_output_view")
+            <- (void <- $dump_view <- $experience_sliced_view <- f"{frame_workspace_dir}/const_experience_view")
+            <- (void <- list[$dump_view] <- $frame_grad_value <- f"{frame_workspace_dir}/mutable_frame_grad")
+            <- ($frame_prompt <- ($grad_input_prompt | default_prompt_for_grad_input_frame)
+                <- $task_prompt
+                <- $frame_workspace_dir
+                <- f"{frame_workspace_dir}/const_grad_output_view"
+                <- f"{frame_workspace_dir}/const_frame_input"
+                <- f"{workspace_dir}/const_output_view"
+                <- f"{frame_workspace_dir}/const_experience_view"
+                <- f"{frame_workspace_dir}/mutable_frame_grad")
+            <- ($element_tasks list[AgentTask] <- list[AgentTask] <- $frame_workspace_dir <- "mutable_frame_grad" <- $frame_prompt)
+            <- ($task_ctx <- MergedCtx <- ($frames, list[$frame_grad_value]))))
+
+    # ── Single TaskHandler call with all tasks ──
+    <- ($all_tasks list[AgentTask] <- flatten <- NestedList[$sole_element_task AgentTask | $element_tasks list[AgentTask]])
     <- (void <- Import[experience/llm_client/task_handler.viba] <- $all_tasks <- $llm_method <- $llm_env)
-    <- ($diff
-        <- $scalar_input.st_get_diff
-        <- $scalar_grad_input_value)
-    <- (void <- $scalar_grad_input_view.st_assign <- $diff)
+
+    # ── Per-element refinement: only Merged needs repack into scalar_grad_input_value ──
+    <- (NestedList[void]
+        <- { match $task_ctx }
+        <- ({ case PlainCtx } <- void)
+        <- ({ case MergedCtx ($frames, $frame_grad_values) }
+            <- (list[$improved_frame_content str] <- list[read_storage] <- $frame_grad_values <- $storage_flat_index 0)
+            <- ($improved_frames list[Frame]
+                <- zip <- $frames.index <- $coefficient 1.0 <- $improved_frame_content)
+            <- ($improved_merged str <- $merger.pack <- $improved_frames)
+            <- (void <- write_storage <- $scalar_grad_input_value <- $storage_flat_index 0 <- $improved_merged)))
+
+    # ── Final stage: uniform diff + assign for all elements ──
+    <- (NestedList[$diff] <- $scalar_input.st_get_diff <- $scalar_grad_input_value)
+    <- (NestedList[void] <- $scalar_grad_input_view.st_assign <- $diff)
+
+default_prompt_for_grad_input_frame :=
+    $prompt str
+    <- $task_prompt str
+    <- $workspace_dir str
+    <- $const_grad_output_view str
+    <- $const_frame_input str
+    <- $const_output_view str
+    <- $const_experience_view str
+    <- $mutable_frame_grad str
+    # inline
+    <- ($prompt <- '''
+        You are a symbolic gradient calculator for backward pass.
+
+        f"{task_prompt}"
+
+        During forward pass, this input FRAME (one piece of a larger merged input)
+        was translated to output using experience entries.
+        Now given the output gradient (how output should change), compute gradient
+        for this single frame.
+
+        Context (read-only):
+        - Output gradient (text diff): f"{const_grad_output_view}"
+        - This frame's original content: f"{const_frame_input}"
+        - Original output: f"{const_output_view}"
+        - Experience entries used: f"{const_experience_view}"
+
+        Compute and write:
+        1. Improved frame content in f"{mutable_frame_grad}":
+           How should this frame's text change to improve the output?
+        2. File f"{mutable_frame_grad}/<xxx>/data" must be a better version of f"{const_frame_input}/<xxx>/data"
+
+        Replace all TODO with improved source text for this frame only.
+    ''')
 
 st_moe_backward_grad_experience :=
     $grad_experience ExperienceTensor[Symbolic[torch.Tensor]]

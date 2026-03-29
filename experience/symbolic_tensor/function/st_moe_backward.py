@@ -12,6 +12,7 @@ from experience.symbolic_tensor.tensor_util.get_diff_tensor import get_diff_tens
 from experience.symbolic_tensor.tensor_util.slice_view import slice_view
 from experience.symbolic_tensor.tensor_util.slice_tensor import slice_tensor
 from experience.symbolic_tensor.tensor_util.dump_view import dump_view
+from experience.symbolic_tensor.tensor_util.make_tensor import make_tensor
 from experience.llm_client.agent_task import AgentTask
 from experience.llm_client.task_handler import TaskHandler
 from experience.sparse_util.convert_nested_list_coordinates_to_pairs_coordinates import (
@@ -20,12 +21,66 @@ from experience.sparse_util.convert_nested_list_coordinates_to_pairs_coordinates
 from experience.sparse_util.transpose_pairs_coordinates import (
     transpose_pairs_coordinates,
 )
+from experience.fs_util.text_merger import TextMerger, kFrameMarker
 
 
 def _scalar_slice_indices(shape: torch.Size) -> List[List[int]]:
     """Generate all coordinate tuples for iterating over each scalar element."""
     ranges = [range(s) for s in shape]
     return [list(coord) for coord in itertools.product(*ranges)]
+
+
+def _get_storage_path(tensor: torch.Tensor, flat_index: int) -> str:
+    """Get storage file path for a flat index."""
+    digits = list(str(flat_index))
+    return os.path.join(
+        tensor.st_relative_to,
+        tensor.st_tensor_uid,
+        "storage",
+        os.path.join(*digits),
+        "data",
+    )
+
+
+def _read_storage(tensor: torch.Tensor, flat_index: int) -> Optional[str]:
+    """Read the text content at a flat index, resolving symlinks."""
+    path = os.path.realpath(_get_storage_path(tensor, flat_index))
+    if not os.path.isfile(path):
+        return None
+    with open(path) as f:
+        return f.read()
+
+
+def _write_storage(tensor: torch.Tensor, flat_index: int, content: str) -> None:
+    """Write text content to a flat index."""
+    path = _get_storage_path(tensor, flat_index)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(content)
+
+
+# Sum type tags for input content detection
+_PLAIN = "plain"
+_MERGED = "merged"
+
+
+def _detect_input_content_type(
+    content: Optional[str],
+) -> Tuple[str, Any]:
+    """Detect whether content is plain text or merged frames.
+
+    Returns:
+        (tag, data) where:
+        - (_PLAIN, content_str) for plain text
+        - (_MERGED, frames_list) for merged content (list of (index, coeff, content) tuples)
+    """
+    if content is None:
+        return (_PLAIN, "")
+    if kFrameMarker in content:
+        frames = TextMerger.unpack(content)
+        if frames:
+            return (_MERGED, frames)
+    return (_PLAIN, content)
 
 
 def _replace_last_tensor_with_full_slice(
@@ -201,6 +256,36 @@ def default_prompt_for_grad_input(
     )
 
 
+def default_prompt_for_grad_input_frame(
+    task_prompt: str,
+    workspace_dir: str,
+    const_grad_output_view: str,
+    const_frame_input: str,
+    const_output_view: str,
+    const_experience_view: str,
+    mutable_frame_grad: str,
+) -> str:
+    """Default prompt for computing gradient of a single merged frame."""
+    return (
+        "You are a symbolic gradient calculator for backward pass.\n\n"
+        f"{task_prompt}\n\n"
+        "During forward pass, this input FRAME (one piece of a larger merged input)\n"
+        "was translated to output using experience entries.\n"
+        "Now given the output gradient (how output should change), compute gradient\n"
+        "for this single frame.\n\n"
+        "Context (read-only):\n"
+        f"- Output gradient (text diff): \"{const_grad_output_view}\"\n"
+        f"- This frame's original content: \"{const_frame_input}\"\n"
+        f"- Original output: \"{const_output_view}\"\n"
+        f"- Experience entries used: \"{const_experience_view}\"\n\n"
+        "Compute and write:\n"
+        f"1. Improved frame content in \"{mutable_frame_grad}\":\n"
+        "   How should this frame's text change to improve the output?\n"
+        f"2. File \"{mutable_frame_grad}/<xxx>/data\" must be a better version of \"{const_frame_input}/<xxx>/data\"\n\n"
+        "Replace all TODO with improved source text for this frame only.\n"
+    )
+
+
 def default_prompt_for_grad_exp_key(
     task_prompt: str,
     workspace_dir: str,
@@ -290,13 +375,20 @@ def st_moe_backward_grad_input(
     topk: int = 16,
     llm_method: str = "raw_llm_api",
     llm_env: Optional[Dict[str, str]] = None,
+    text_merger: Optional[Any] = None,
 ) -> Union[torch.Tensor, None]:
     """Compute grad_input by iterating per input scalar element.
+
+    Handles both plain text and merged content (from st_attention via TextMerger.pack).
+    Plain elements get a single LLM call; merged elements get per-frame LLM calls,
+    then frames are repacked. All tasks are batched into a single TaskHandler call.
 
     Only runs if input.requires_grad; returns None otherwise.
     """
     if not input.requires_grad:
         return None
+
+    merger = text_merger or TextMerger
 
     grad_input = todo_tensor_like(input)
 
@@ -310,12 +402,17 @@ def st_moe_backward_grad_input(
         selected_experience_qkv_indexes_list, input_shape
     )
 
-    # Collect all tasks, then batch-call TaskHandler
-    all_tasks = []
-    task_contexts = []  # (workspace_dir, grad_input_dir, scalar_grad_input_view)
+    # Phase 1: Per-element task construction + context
+    all_tasks: List[AgentTask] = []
+    element_contexts: List[Tuple] = []
+    # Each element_context is:
+    #   (_PLAIN, workspace_dir, scalar_grad_input_view, scalar_input, scalar_grad_input_value)
+    #   (_MERGED, workspace_dir, scalar_grad_input_view, scalar_input, scalar_grad_input_value,
+    #            frames, frame_grad_values, frame_workspace_dirs)
 
     for coords, select_experience_query_indexes in zip(coords_list, flat_selected_indexes):
         int_slices = [c for c in coords]
+        flat_index = sum(c * s for c, s in zip(coords, input.stride()))
 
         scalar_grad_output = slice_view(grad_output, int_slices)
         scalar_input = slice_view(input, int_slices)
@@ -331,42 +428,115 @@ def st_moe_backward_grad_input(
         )
         experience_sliced_view = slice_view(experience, select_experience_indexes)
 
+        # Detect content type
+        scalar_input_content = _read_storage(input, flat_index)
+        content_type, content_data = _detect_input_content_type(scalar_input_content)
+
         workspace_dir = tempfile.mkdtemp()
         grad_output_view_dir = os.path.join(workspace_dir, "const_grad_output_view")
         input_view_dir = os.path.join(workspace_dir, "const_input_view")
         output_view_dir = os.path.join(workspace_dir, "const_output_view")
         experience_view_dir = os.path.join(workspace_dir, "const_experience_view")
-        grad_input_dir = os.path.join(workspace_dir, "mutable_grad_input_dir")
 
+        # Dump const views (shared by both cases)
         dump_view(scalar_grad_output, grad_output_view_dir, "txt")
         dump_view(scalar_input, input_view_dir, "txt")
         dump_view(scalar_output, output_view_dir, "txt")
         dump_view(experience_sliced_view, experience_view_dir, "txt")
-        dump_view(scalar_grad_input_value, grad_input_dir, "txt")
 
-        prompt = (grad_input_prompt or default_prompt_for_grad_input)(
-            task_prompt, workspace_dir, grad_output_view_dir, input_view_dir,
-            output_view_dir, experience_view_dir, grad_input_dir,
-        )
+        if content_type == _PLAIN:
+            # Single AgentTask
+            grad_input_dir = os.path.join(workspace_dir, "mutable_grad_input_dir")
+            dump_view(scalar_grad_input_value, grad_input_dir, "txt")
 
-        agent_task = AgentTask(
-            workspace_dir=workspace_dir,
-            output_relative_dir=["mutable_grad_input_dir"],
-            prompt=prompt,
-        )
-        all_tasks.append(agent_task)
-        task_contexts.append((workspace_dir, scalar_grad_input_view, scalar_input, scalar_grad_input_value))
+            prompt = (grad_input_prompt or default_prompt_for_grad_input)(
+                task_prompt, workspace_dir, grad_output_view_dir, input_view_dir,
+                output_view_dir, experience_view_dir, grad_input_dir,
+            )
+            agent_task = AgentTask(
+                workspace_dir=workspace_dir,
+                output_relative_dir=["mutable_grad_input_dir"],
+                prompt=prompt,
+            )
+            all_tasks.append(agent_task)
+            element_contexts.append((
+                _PLAIN, workspace_dir, scalar_grad_input_view,
+                scalar_input, scalar_grad_input_value,
+            ))
 
-    # Batch LLM call
+        else:
+            # Merged: list[AgentTask] — one per frame
+            frames = content_data  # list of (index, coefficient, content) tuples
+            frame_grad_values = []
+            frame_workspace_dirs = []
+
+            for frame_idx, frame_coeff, frame_content in frames:
+                frame_ws = tempfile.mkdtemp()
+                frame_workspace_dirs.append(frame_ws)
+
+                # Create scalar tensor for this frame's content
+                frame_input_tensor = make_tensor(frame_content, input.st_relative_to)
+                frame_grad_value = todo_tensor_like(frame_input_tensor)
+                frame_grad_values.append(frame_grad_value)
+
+                # Dump per-frame const + mutable
+                frame_input_dir = os.path.join(frame_ws, "const_frame_input")
+                frame_grad_output_dir = os.path.join(frame_ws, "const_grad_output_view")
+                frame_experience_dir = os.path.join(frame_ws, "const_experience_view")
+                frame_grad_dir = os.path.join(frame_ws, "mutable_frame_grad")
+
+                dump_view(frame_input_tensor, frame_input_dir, "txt")
+                dump_view(scalar_grad_output, frame_grad_output_dir, "txt")
+                dump_view(experience_sliced_view, frame_experience_dir, "txt")
+                dump_view(frame_grad_value, frame_grad_dir, "txt")
+
+                prompt = (grad_input_prompt or default_prompt_for_grad_input_frame)(
+                    task_prompt, frame_ws, frame_grad_output_dir, frame_input_dir,
+                    output_view_dir, frame_experience_dir, frame_grad_dir,
+                )
+                agent_task = AgentTask(
+                    workspace_dir=frame_ws,
+                    output_relative_dir=["mutable_frame_grad"],
+                    prompt=prompt,
+                )
+                all_tasks.append(agent_task)
+
+            element_contexts.append((
+                _MERGED, workspace_dir, scalar_grad_input_view,
+                scalar_input, scalar_grad_input_value,
+                frames, frame_grad_values, frame_workspace_dirs,
+            ))
+
+    # Phase 2: Single TaskHandler call
     if all_tasks:
         TaskHandler()(all_tasks, llm_method, llm_env=llm_env)
 
-    # Compute diff between original input and LLM-written improved version,
-    # assign diff back to grad_input view
-    for workspace_dir, scalar_grad_input_view, scalar_input, scalar_grad_input_value in task_contexts:
-        diff = get_diff_tensor(scalar_input, scalar_grad_input_value)
-        assign_tensor(scalar_grad_input_view, diff)
-        shutil.rmtree(workspace_dir)
+    # Phase 3: Per-element refinement (Merged needs repack)
+    for ctx in element_contexts:
+        if ctx[0] == _MERGED:
+            _, ws_dir, gi_view, s_input, gi_value, frames, frame_gvs, frame_ws_dirs = ctx
+            # Read improved frame contents, repack with coefficient=1.0
+            improved_frames = []
+            for (frame_idx, frame_coeff, frame_content), frame_gv in zip(frames, frame_gvs):
+                improved_content = _read_storage(frame_gv, 0)
+                if improved_content is None:
+                    improved_content = frame_content  # fallback to original
+                improved_frames.append((frame_idx, 1.0, improved_content))
+            improved_merged = merger.pack(improved_frames)
+            _write_storage(gi_value, 0, improved_merged)
+            # Cleanup frame workspaces
+            for fws in frame_ws_dirs:
+                shutil.rmtree(fws)
+
+    # Phase 4: Uniform final stage — diff + assign for all elements
+    for ctx in element_contexts:
+        if ctx[0] == _PLAIN:
+            _, ws_dir, gi_view, s_input, gi_value = ctx
+        else:
+            _, ws_dir, gi_view, s_input, gi_value = ctx[0:5]
+        diff = get_diff_tensor(s_input, gi_value)
+        assign_tensor(gi_view, diff)
+        shutil.rmtree(ws_dir)
 
     return grad_input
 
@@ -498,11 +668,13 @@ def st_moe_backward(
     topk: int = 16,
     llm_method: str = "raw_llm_api",
     llm_env: Optional[Dict[str, str]] = None,
+    text_merger: Optional[Any] = None,
 ) -> Tuple[Union[torch.Tensor, None], torch.Tensor]:
     """Backward pass of the symbolic transform.
 
     Computes grad_input and grad_experience separately:
     - grad_input: iterates per input element, LLM computes input text diffs
+      Handles mixed plain/merged content per element.
     - grad_experience: iterates per experience entry via transposed sparse coordinates,
       LLM sees all relevant grad_outputs merged for each experience entry
 
@@ -518,6 +690,8 @@ def st_moe_backward(
         task_prompt: High-level task description (e.g. "Translate Python To Viba").
         topk: Number of top experience entries used per element.
         llm_method: LLM backend to use.
+        llm_env: Environment variables for LLM.
+        text_merger: Optional TextMerger-compatible class. None uses default TextMerger.
 
     Returns:
         (grad_input, grad_experience) — grad_input is None if input doesn't require grad.
@@ -526,6 +700,7 @@ def st_moe_backward(
         grad_output, input, output, experience,
         selected_experience_qkv_indexes_list,
         grad_input_prompt, task_prompt, topk, llm_method, llm_env,
+        text_merger=text_merger,
     )
 
     grad_experience = st_moe_backward_grad_experience(
@@ -539,7 +714,6 @@ def st_moe_backward(
 
 if __name__ == "__main__":
     import subprocess
-    from experience.symbolic_tensor.tensor_util.make_tensor import make_tensor
 
     # Source anthropic env vars
     result = subprocess.run(
@@ -763,5 +937,61 @@ if __name__ == "__main__":
         for i in range(grad_experience.numel()):
             ge_text = read_storage(grad_experience, i)
             print(f"  grad_experience[{i}]: TODO={'TODO' == ge_text.strip()} {repr(ge_text[:80])}")
+
+    # Test 7: Merged content backward (2 inputs: 1 plain + 1 merged)
+    print("Test 7: Mixed plain/merged backward")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Element 0: plain text
+        # Element 1: merged content (2 frames from st_attention)
+        merged_content = TextMerger.pack([
+            (0, 1.0, "The cat sat on the mat"),
+            (1, 0.5, "A dog played in the park"),
+        ])
+        # Build input tensor: element 0 is plain, element 1 is merged
+        input_tensor = make_tensor(["Hello world", merged_content], tmpdir)
+        input_tensor.requires_grad_(True)
+
+        exp_data = [
+            ["greeting\nhello", "Hello world", "Bonjour le monde"],
+            ["animals\ncat\ndog", "Animals text", "Texte sur les animaux"],
+        ]
+        exp_tensor = make_tensor(exp_data, tmpdir)
+        output_tensor = make_tensor(["Bonjour le monde", "Les animaux sont mignons"], tmpdir)
+        grad_output_tensor = make_tensor(
+            ["Make greeting more formal", "Improve animal descriptions"],
+            tmpdir,
+        )
+        grad_output_tensor.data.fill_(1.0)
+
+        sel_indexes = [
+            [torch.tensor([0], dtype=torch.long), torch.tensor([0], dtype=torch.long)],
+            [torch.tensor([1], dtype=torch.long), torch.tensor([0], dtype=torch.long)],
+        ]
+
+        grad_input = st_moe_backward_grad_input(
+            grad_output_tensor, input_tensor, output_tensor, exp_tensor,
+            selected_experience_qkv_indexes_list=sel_indexes,
+            topk=1,
+            llm_method="raw_llm_api",
+        )
+
+        run_test("grad_input shape [2]", list(grad_input.shape) == [2])
+
+        # Element 0 (plain): should have a unified diff
+        gi0 = _read_storage(grad_input, 0)
+        run_test("grad_input[0] (plain) is not None", gi0 is not None)
+        run_test("grad_input[0] (plain) is unified diff", gi0 is not None and "---" in gi0)
+        print(f"  grad_input[0] (plain): {repr(gi0[:80]) if gi0 else 'None'}")
+
+        # Element 1 (merged): should have a unified diff of repacked merged content
+        gi1 = _read_storage(grad_input, 1)
+        run_test("grad_input[1] (merged) is not None", gi1 is not None)
+        # The diff target was repacked merged content, so the diff should exist
+        run_test("grad_input[1] (merged) is unified diff", gi1 is not None and "---" in gi1)
+        print(f"  grad_input[1] (merged): {repr(gi1[:120]) if gi1 else 'None'}")
+
+        # Numeric channel: both should have coeff 1.0
+        run_test("grad_input[0] coeff 1.0", grad_input.data[0].item() == 1.0)
+        run_test("grad_input[1] coeff 1.0", grad_input.data[1].item() == 1.0)
 
     print("\nAll tests completed.")
