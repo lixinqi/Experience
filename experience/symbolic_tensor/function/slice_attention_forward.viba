@@ -2,6 +2,7 @@ slice_attention_forward :=
     $final_output Symbolic[torch.Tensor]
     <- $input Symbolic[torch.Tensor[($batch, $seq_len)]]
     <- $attention_mask torch.Tensor[($batch, $seq_len, $seq_len), $dtype bool]
+    <- $return_view bool # default False
     # inline
     <- { assert shape constraints }
     <- ($final_output
@@ -27,5 +28,6 @@ slice_attention_forward :=
         <- $slice_view
         <- $input
         <- ($batch_i, $prefix_token_index_tensor))
-    <- (void <- token_output_view.st_assign <- $token_input_view)
+    <- ($assign <- { True => .st_assign_view; False => .st_assign; } <- $return_view)
+    <- ($assign <- token_output_view <- $token_input_view)
     <- { final_output[attention_mask] = 1.0 }

@@ -13,6 +13,12 @@ def st_assign(lvalue, rvalue):
 
 torch.Tensor.st_assign = st_assign
 
+def st_assign_view(lvalue, rvalue):
+    from experience.symbolic_tensor.tensor_util.assign_view import assign_view
+    return assign_view(lvalue, rvalue)
+
+torch.Tensor.st_assign_view = st_assign_view
+
 def st_get_diff(lvalue, rvalue):
     from experience.symbolic_tensor.tensor_util.get_diff_tensor import get_diff_tensor
     return get_diff_tensor(lvalue, rvalue)

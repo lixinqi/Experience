@@ -1,13 +1,30 @@
+import os
 import torch
 
 from experience.symbolic_tensor.tensor_util.make_none_tensor import make_none_tensor
 from experience.symbolic_tensor.tensor_util.slice_view import slice_view
 from experience.symbolic_tensor.tensor_util.assign_tensor import assign_tensor
+from experience.symbolic_tensor.tensor_util.assign_view import assign_view
+
+
+def _get_raw_storage_path(tensor: torch.Tensor, coordinates):
+    """Get storage file path WITHOUT resolving symlinks."""
+    stride = tensor.stride()
+    flat_index = sum(c * s for c, s in zip(coordinates, stride))
+    digits = list(str(flat_index))
+    return os.path.join(
+        tensor.st_relative_to,
+        tensor.st_tensor_uid,
+        "storage",
+        os.path.join(*digits),
+        "data",
+    )
 
 
 def slice_attention_forward(
     input: torch.Tensor,
     attention_mask: torch.Tensor,
+    return_view: bool = False,
 ) -> torch.Tensor:
     """Scatter input elements into a 3D output according to attention mask.
 
@@ -17,6 +34,7 @@ def slice_attention_forward(
     Args:
         input: Symbolic tensor of shape (batch, seq_len).
         attention_mask: Bool tensor of shape (batch, seq_len, seq_len).
+        return_view: If True, use assign_view (symlinks) instead of assign_tensor (copies).
 
     Returns:
         Symbolic tensor of shape (batch, seq_len, seq_len).
@@ -49,14 +67,30 @@ def slice_attention_forward(
             attention_mask[batch_i, token_j, :], as_tuple=True
         )[0]
 
-        # 1D output view: final_output[batch_i, token_j, prefix_indices]
-        token_output_view = slice_view(final_output, [batch_i, token_j, prefix_indices])
-
         # 1D input view: input[batch_i, prefix_indices]
         token_input_view = slice_view(input, [batch_i, prefix_indices])
 
-        # Copy input storage files into output positions
-        assign_tensor(token_output_view, token_input_view)
+        # Assign input storage to output positions (copy or symlink)
+        if return_view:
+            # Create symlinks directly in final_output's storage → input's storage
+            for prefix_k in prefix_indices.tolist():
+                fo_path = _get_raw_storage_path(
+                    final_output, [batch_i, token_j, prefix_k]
+                )
+                inp_path = os.path.realpath(
+                    _get_raw_storage_path(input, [batch_i, prefix_k])
+                )
+                os.makedirs(os.path.dirname(fo_path), exist_ok=True)
+                if os.path.islink(fo_path) or os.path.exists(fo_path):
+                    os.remove(fo_path)
+                rel = os.path.relpath(inp_path, os.path.dirname(fo_path))
+                os.symlink(rel, fo_path)
+        else:
+            # 1D output view: final_output[batch_i, token_j, prefix_indices]
+            token_output_view = slice_view(
+                final_output, [batch_i, token_j, prefix_indices]
+            )
+            assign_tensor(token_output_view, token_input_view)
 
     # Mark all attended positions with 1.0
     final_output[attention_mask] = 1.0
@@ -221,5 +255,47 @@ if __name__ == "__main__":
             run_test("non-bool mask raises", False)
         except AssertionError:
             run_test("non-bool mask raises", True)
+
+    # Test 9: return_view=True — symlinks instead of copies
+    print("Test 9: return_view=True (symlinks)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        inp = make_tensor([["alpha", "beta"]], tmpdir)
+        mask = torch.tensor([[[True, False], [True, True]]])
+
+        result = slice_attention_forward(inp, mask, return_view=True)
+        run_test("shape (1, 2, 2)", list(result.shape) == [1, 2, 2])
+        run_test("[0,0,0]='alpha'", read_out(result, 0) == "alpha")
+        run_test("[0,1,0]='alpha'", read_out(result, 2) == "alpha")
+        run_test("[0,1,1]='beta'", read_out(result, 3) == "beta")
+        run_test("attended are 1.0", result[mask].eq(1.0).all().item())
+        run_test("non-attended are 0.0", result[~mask].eq(0.0).all().item())
+
+    # Test 10: return_view=True — write-through to source
+    print("Test 10: return_view write-through")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        inp = make_tensor([["original"]], tmpdir)
+        mask = torch.ones(1, 1, 1, dtype=torch.bool)
+
+        result = slice_attention_forward(inp, mask, return_view=True)
+        run_test("reads 'original'", read_out(result, 0) == "original")
+        # Modify source — result should reflect change
+        src_path = os.path.join(tmpdir, inp.st_tensor_uid, "storage", "0", "data")
+        with open(src_path, "w") as f:
+            f.write("modified")
+        run_test("reads 'modified' after source update", read_out(result, 0) == "modified")
+
+    # Test 11: return_view=False (default) — independent copy
+    print("Test 11: return_view=False (independent copy)")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        inp = make_tensor([["original"]], tmpdir)
+        mask = torch.ones(1, 1, 1, dtype=torch.bool)
+
+        result = slice_attention_forward(inp, mask, return_view=False)
+        run_test("reads 'original'", read_out(result, 0) == "original")
+        # Modify source — result should NOT change
+        src_path = os.path.join(tmpdir, inp.st_tensor_uid, "storage", "0", "data")
+        with open(src_path, "w") as f:
+            f.write("modified")
+        run_test("still 'original' after source update", read_out(result, 0) == "original")
 
     print("\nAll tests completed.")
