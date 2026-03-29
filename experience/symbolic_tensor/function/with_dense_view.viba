@@ -1,0 +1,7 @@
+with_dense_view :=
+    Symbolic[torch.Tensor]
+    <- $dense_handler (Symbolic[torch.Tensor] <- Symbolic[torch.Tensor])
+    <- $input Symbolic[torch.Tensor]
+    #inline
+    <- Import[experience/symbolic_tensor/function/sparse_to_dense.viba]
+    <- Import[experience/symbolic_tensor/function/dense_to_sparse.viba]

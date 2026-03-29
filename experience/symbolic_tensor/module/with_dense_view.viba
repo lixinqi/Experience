@@ -1,0 +1,8 @@
+WithDenseView :=
+    # forward
+    Symbolic[torch.Tensor]
+    <- Symbolic[torch.Tensor]
+    # __init__
+    <- $dense_handler (Symbolic[torch.Tensor] <- Symbolic[torch.Tensor])
+    # inline
+    <- Import[experience/symbolic_tensor/function/with_dense_view.viba]
