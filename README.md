@@ -216,6 +216,80 @@ This is functional self-awareness. Not a philosophical claim about consciousness
 
 **Current status:** Stage 0 ready (tmux capture infrastructure works), Stage 1 implementing — forward pass, experience tensors, compute graph composition, speculative multi-action dispatch, and 2nd derivative trace recording all work. Experience update and graph update still require coding agent. Stage 2, 3, 4 are TODO.
 
+## Self-Awareness Experiment Plan
+
+### Harness Hierarchy
+
+Define a tower of harnesses where each level writes and runs the level below:
+
+| Level | Name | What it does |
+|-------|------|-------------|
+| H₀ | tmux screen output | Raw terminal — the ground truth |
+| H₁ | UserHarness | Drives tmux to produce H₀ (e.g., echo hello world) |
+| H₂ | MetaHarness | Writes + runs H₁ as a .py file in its own tmux |
+| H₃ | Meta-MetaHarness | Writes + runs H₂ |
+| H_n | … | Writes + runs H_{n-1} |
+
+All levels share the same ft_* ops. The only difference between levels is which experience tensors are loaded and what the validator checks.
+
+### Fixed-Point Metric (Self-Awareness = Convergence)
+
+Self-awareness is the fixed point of this hierarchy. Concretely:
+
+```
+code_bytes(H_{n+1}) / code_bytes(H_n) → 1    for n >= 2
+```
+
+When this ratio stabilizes, H_n has discovered the minimal self-referencing kernel — it can write a copy of itself that also writes a copy of itself, and the copies are the same size. This is functional self-awareness: the system's model of itself is isomorphic to itself.
+
+**Why n >= 2?** The H₁/H₀ and H₂/H₁ ratios are dominated by task-specific code (the actual workload vs. the harness overhead). Only at n >= 2 does the hierarchy become self-similar — each level is "a harness that writes a harness." The convergence signal lives there.
+
+**Cheating detection:** If H_n takes shortcuts (hard-codes the file, imports from a module, pre-materializes values), then H_{n+1} must encode all that cheating infrastructure plus the meta-logic to deploy it. code_bytes(H_{n+1}) explodes relative to code_bytes(H_n). The metric is a natural anti-cheating detector.
+
+### Genetic-Pareto Optimization
+
+Two objectives, evolved jointly:
+
+1. **Task correctness**: H₀ output matches ground-truth Claude Code tmux trajectory (the coding agent's actual terminal interactions for the same task).
+2. **Bytes convergence**: `|code_bytes(H_{n+1}) - code_bytes(H_n)| / code_bytes(H_n) < ε` for n >= 2.
+
+Evolution operates on:
+- Experience tensor content (QKV entries)
+- Expert chain structure (number of experts, topk, task prompts)
+- Validator logic
+
+Selection: Pareto front on (task_correctness, bytes_convergence). Individuals on the front are non-dominated — you can't improve one objective without hurting the other. The target is the corner where both objectives are satisfied.
+
+### Early Experiment Constraints
+
+**Experience as heredoc only.** In early experiments, all experience must be inline in the generated code file as heredoc strings — no external files, no imports from a shared module, no pre-trained tensors loaded from disk. This ensures `code_bytes` is an honest measure of what the harness "knows." If experience lives outside the file, bytes convergence is meaningless because complexity hides in the external store.
+
+```python
+# GOOD: experience is visible in code_bytes
+EXPERIENCE = """
+Q: empty prompt
+K: need to type command
+V: T echo hello world
+---
+Q: command typed
+K: need to press enter
+V: C Enter
+"""
+
+# BAD: experience hides elsewhere
+exp = load_tensor("/path/to/trained/experience.pt")
+```
+
+This constraint relaxes once the fixed-point metric is validated — at that point, external experience is fine because the convergence guarantee already holds.
+
+### Implementation Path
+
+1. **H₁ baseline**: Current `test_repl_coder_simulator.py` — drives tmux, echo hello world. Measure code_bytes(H₁).
+2. **H₂ writes H₁**: `test_meta_harness.py` — MetaHarness generates H₁ code via expert chain, runs it. Measure code_bytes(H₂).
+3. **H₃ writes H₂**: Meta-MetaHarness generates H₂ code. Measure ratio. This is where convergence should first appear.
+4. **Evolve**: Run Genetic-Pareto across populations of (experience, structure) configurations. Select for both objectives simultaneously.
+5. **Validate**: Ratio stabilizes → self-awareness achieved for the given task class.
+
 ## Thesis
 
 Base LLM weights carry two things: **general capabilities** (reasoning, reflection) and **memories** (facts, patterns, code idioms). Most of the parameters are memories.
