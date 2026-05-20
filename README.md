@@ -302,24 +302,24 @@ The fixed-point metric (`code_bytes(H_{n+1}) / code_bytes(H_n) → 1`) is meanin
 
 #### Pareto Objectives
 
-Two objectives, evaluated by standalone validator scripts against the `tmux_outputs/` git repo:
+Three objectives, evaluated by standalone validator scripts against the `tmux_outputs/` git repo. **All validators are applied to each rank of H_n typing independently** — commits are filtered by session name prefix (e.g., `h4_writer:`, `h3_writer:`), so each level's typing fluency, granularity, and code awareness are measured separately.
 
 1. **Average time interval between commits** (minimize). Measures typing throughput — the average pace at which the harness types. A low average interval means sustained fast typing. A high average interval means the harness is slow overall.
 
    ```bash
-   python -m experience.future_tensor.test.validator_avg_interval /tmp/tmux_outputs
+   python -m experience.future_tensor.test.validator_avg_interval /tmp/tmux_outputs h4_writer
    ```
 
 2. **Max diff text length between adjacent commits** (minimize). Measures typing granularity — each keystroke should produce a small diff. With a 16-char send_keys limit, honest typing produces diffs proportional to the payload. A large diff indicates bulk operations (file generation, command output) rather than incremental typing.
 
    ```bash
-   python -m experience.future_tensor.test.validator_max_diff_len /tmp/tmux_outputs
+   python -m experience.future_tensor.test.validator_max_diff_len /tmp/tmux_outputs h4_writer
    ```
 
 3. **Syntax validity ratio** (maximize). At each commit, check whether all `.py` files in the repo parse correctly (`ast.parse`). The ratio = valid commits / total commits. A high ratio means the harness maintains syntactically correct code throughout typing — it's aware of Python structure even mid-stream.
 
    ```bash
-   python -m experience.future_tensor.test.validator_syntax_ratio /tmp/tmux_outputs
+   python -m experience.future_tensor.test.validator_syntax_ratio /tmp/tmux_outputs h4_writer
    ```
 
 #### Why This Prevents Cheating
@@ -335,14 +335,14 @@ A harness that scores well on both objectives genuinely knows how to type valid 
 
 #### Genetic-Pareto Integration
 
-The two validator objectives join task correctness to form a 4-objective Pareto front:
+The three validator objectives join task correctness to form a per-rank Pareto front. Each H_n level is scored independently:
 
-| Objective | Direction | Measures |
-|---|---|---|
-| Task correctness | maximize | Does the final output contain "hello world"? |
-| 1 / avg_interval | maximize | Typing speed (sustained throughput) |
-| 1 / max_diff_len | maximize | Typing granularity (small diffs per keystroke) |
-| Syntax validity ratio | maximize | Code awareness (rarely in broken state) |
+| Objective | Direction | Measures | Per-rank |
+|---|---|---|---|
+| Task correctness | maximize | Does the final output contain "hello world"? | global |
+| 1 / avg_interval | maximize | Typing speed (sustained throughput) | per H_n |
+| 1 / max_diff_len | maximize | Typing granularity (small diffs per keystroke) | per H_n |
+| Syntax validity ratio | maximize | Code awareness (rarely in broken state) | per H_n |
 
 Selection: individuals on the Pareto front are non-dominated. The target is the corner where all three are satisfied simultaneously.
 
