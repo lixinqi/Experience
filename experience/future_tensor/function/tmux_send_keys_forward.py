@@ -9,8 +9,15 @@ Unified send-keys forward: parses "T " / "C " prefix to decide literal vs key-na
 $input elements contain prefixed commands ("T echo hello" or "C Enter").
 $session_name elements contain the instance_id for session lookup.
 Output shape = $input shape.
+
+Infrastructure constraints:
+- Payload is truncated to MAX_SEND_KEYS_LEN (16) characters.
+- If TMUX_OUTPUTS_DIR is set and contains a .git repo, each send_keys
+  triggers a pane capture + git commit (audit trail for validators).
 """
 
+import os
+import subprocess
 from typing import List, Tuple
 
 import libtmux
@@ -20,6 +27,8 @@ from experience.future_tensor.future_tensor import FutureTensor
 from experience.future_tensor.status import Status
 from experience.future_tensor.function.tmux_session import tmux_session_prefix
 from experience.future_tensor.function.tmux_send_text_forward import _broadcast_coords
+
+MAX_SEND_KEYS_LEN = 16
 
 
 def _parse_prefix(raw: str) -> Tuple[str, bool]:
@@ -51,6 +60,31 @@ async def _read_ft(ft, coordinates, shape, trajactory):
     return text
 
 
+def _tmux_outputs_commit(session_name, payload, pane):
+    """Capture pane and commit to TMUX_OUTPUTS_DIR git repo (no-op if unconfigured).
+
+    Pane captures go to .captures/ (gitignored) — they're audit trail only.
+    The git diff tracks only user-created files in the repo root (typed code).
+    """
+    outputs_dir = os.environ.get("TMUX_OUTPUTS_DIR")
+    if not outputs_dir or not os.path.isdir(f"{outputs_dir}/.git"):
+        return
+    # Write pane capture to .captures/ (excluded from diff measurement)
+    captures_dir = f"{outputs_dir}/.captures/{session_name}"
+    os.makedirs(captures_dir, exist_ok=True)
+    seq = len([f for f in os.listdir(captures_dir) if f.endswith(".txt")])
+    captured = pane.capture_pane()
+    text = "\n".join(captured) if isinstance(captured, list) else str(captured)
+    with open(f"{captures_dir}/{seq:04d}.txt", "w") as f:
+        f.write(text)
+    # Commit everything (code files in root + captures)
+    subprocess.run(["git", "add", "."], cwd=outputs_dir, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", f"{session_name}: {payload[:16]}", "--allow-empty"],
+        cwd=outputs_dir, capture_output=True,
+    )
+
+
 def tmux_send_keys_forward(
     input_ft: FutureTensor,
     session_name_ft: FutureTensor,
@@ -76,7 +110,11 @@ def tmux_send_keys_forward(
         if pane is None:
             return ("", Status.self_confidence_but_failed(0.0))
 
+        if literal and len(payload) > MAX_SEND_KEYS_LEN:
+            payload = payload[:MAX_SEND_KEYS_LEN]
+
         pane.send_keys(payload, literal=literal, enter=False)
+        _tmux_outputs_commit(instance_id, payload, pane)
         return ("", Status.confidence(1.0))
 
     result = FutureTensor(
