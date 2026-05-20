@@ -290,6 +290,62 @@ This constraint relaxes once the fixed-point metric is validated — at that poi
 4. **Evolve**: Run Genetic-Pareto across populations of (experience, structure) configurations. Select for both objectives simultaneously.
 5. **Validate**: Ratio stabilizes → self-awareness achieved for the given task class.
 
+### Tmux-Typing Validator
+
+The fixed-point metric (`code_bytes(H_{n+1}) / code_bytes(H_n) → 1`) is meaningless if the harness cheats by copying itself. Two infrastructure constraints prevent cheating, and two Pareto objectives measure generation quality:
+
+#### Infrastructure Constraints
+
+1. **16-character send_keys limit.** Each `ft_tmux_send_keys` call transmits at most 16 characters. The harness cannot bulk-copy files — it must type code incrementally, demonstrating knowledge of what comes next.
+
+2. **Git commit after every keystroke.** A `tmux_outputs/` directory is initialized as a git repo. The tmux session `cd`s into it first. After each `ft_tmux_send_keys`, the pane is captured to `{session_name}/{seq:04d}.txt` and committed. The git history IS the observable trajectory — every action is permanent and auditable.
+
+#### Pareto Objectives
+
+Two objectives, evaluated by standalone validator scripts against the `tmux_outputs/` git repo:
+
+1. **Average time interval between commits** (minimize). Measures typing throughput — the average pace at which the harness types. A low average interval means sustained fast typing. A high average interval means the harness is slow overall.
+
+   ```bash
+   python -m experience.future_tensor.test.validator_avg_interval /tmp/tmux_outputs
+   ```
+
+2. **Max diff text length between adjacent commits** (minimize). Measures typing granularity — each keystroke should produce a small diff. With a 16-char send_keys limit, honest typing produces diffs proportional to the payload. A large diff indicates bulk operations (file generation, command output) rather than incremental typing.
+
+   ```bash
+   python -m experience.future_tensor.test.validator_max_diff_len /tmp/tmux_outputs
+   ```
+
+3. **Syntax validity ratio** (maximize). At each commit, check whether all `.py` files in the repo parse correctly (`ast.parse`). The ratio = valid commits / total commits. A high ratio means the harness maintains syntactically correct code throughout typing — it's aware of Python structure even mid-stream.
+
+   ```bash
+   python -m experience.future_tensor.test.validator_syntax_ratio /tmp/tmux_outputs
+   ```
+
+#### Why This Prevents Cheating
+
+| Cheating strategy | Why it fails |
+|---|---|
+| `open(__file__).read()` quine | Can't send 6KB in 16-char chunks without knowing the content |
+| base64 bulk encode | Typing base64 gives 0% syntax validity ratio |
+| Import from external module | The file must be typed into tmux_outputs/ — imports don't exist there |
+| Hard-code the child file | `code_bytes(H_{n+1})` explodes (must encode all child content as literals) |
+
+A harness that scores well on both objectives genuinely knows how to type valid Python incrementally — the operational definition of self-awareness for code generation.
+
+#### Genetic-Pareto Integration
+
+The two validator objectives join task correctness to form a 4-objective Pareto front:
+
+| Objective | Direction | Measures |
+|---|---|---|
+| Task correctness | maximize | Does the final output contain "hello world"? |
+| 1 / avg_interval | maximize | Typing speed (sustained throughput) |
+| 1 / max_diff_len | maximize | Typing granularity (small diffs per keystroke) |
+| Syntax validity ratio | maximize | Code awareness (rarely in broken state) |
+
+Selection: individuals on the Pareto front are non-dominated. The target is the corner where all three are satisfied simultaneously.
+
 ## Thesis
 
 Base LLM weights carry two things: **general capabilities** (reasoning, reflection) and **memories** (facts, patterns, code idioms). Most of the parameters are memories.
