@@ -364,6 +364,20 @@ Mechanical keystroke dispatch (generate all → type sequentially) is distinguis
 - Without fixation points: LLM generates entire file → mechanically types it → indistinguishable from `cat > file`
 - With fixation points: LLM only sees local screen context → must generate incrementally → typing rhythm and content reflect genuine cognitive process (look → think → type → look again)
 
+**Trainable fixation policy.** The fixation point movement is itself learned — an experience tensor with QKV structure:
+- **Query**: current screen state (what's visible, cursor position, what was just typed)
+- **Key**: situation pattern (e.g., "just opened a function body", "need to check import names")
+- **Value**: next fixation point `(capture_screen_index, row_id, col_id)`
+
+This makes "where to look" a trainable skill subject to the same autograd + Pareto selection as other experience. Good fixation policies (look at the signature before writing the body, look at the caller before writing the return type) get selected because they produce better code with higher syntax validity and lower edit distance to the parent level. Bad policies (random fixation, always stare at line 1) produce worse code and get eliminated.
+
+The fixation policy is another `ft_expert` in the generation loop:
+```
+capture → fixation_expert(capture, fixation_exp) → extract_context(capture, fixation_points) → generation_expert → keystrokes
+```
+
+Same infrastructure, same training mechanism, same Pareto selection. The system learns not just what to type, but where to look — closing the loop between attention and generation.
+
 ## Thesis
 
 Base LLM weights carry two things: **general capabilities** (reasoning, reflection) and **memories** (facts, patterns, code idioms). Most of the parameters are memories.
