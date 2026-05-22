@@ -346,6 +346,24 @@ The three validator objectives join task correctness to form a per-rank Pareto f
 
 Selection: individuals on the Pareto front are non-dominated. The target is the corner where all three are satisfied simultaneously.
 
+#### Fixation Point (Human-Like Typing)
+
+Mechanical keystroke dispatch (generate all → type sequentially) is distinguishable from human typing because it lacks attention dynamics. A human's next keystroke depends on where they're currently looking — not on a pre-computed script.
+
+**Fixation point**: `(capture_screen_index, row_id, col_id)` — a triple identifying a spatial position on a temporal screen capture. Analogous to where a human eye fixates between saccades. A list of fixation points traces the attention path over time and space.
+
+**How it integrates:**
+
+1. **Context construction.** The LLM API receives text extracted from neighborhoods around each fixation point. This is temporal, local context — what the "eye" was looking at — not the full file. Each generation step is conditioned on gaze-local information.
+
+2. **Generation loop.** Fixation moves → extract context at fixation points from captures → LLM generates next keystrokes conditioned on that context → keystrokes are typed → new capture → fixation moves again. The typing emerges from attention, not transcription.
+
+3. **Pareto objective.** Edit distance between H_n and H_{n-1} as an additional objective. Forces genuinely different code at each level — if H_n is too similar to H_{n-1} (i.e., copying), the objective penalizes it. Combined with the fixation-based generation, this ensures each level produces original code informed by local visual context.
+
+**Why this prevents the copy problem:**
+- Without fixation points: LLM generates entire file → mechanically types it → indistinguishable from `cat > file`
+- With fixation points: LLM only sees local screen context → must generate incrementally → typing rhythm and content reflect genuine cognitive process (look → think → type → look again)
+
 ## Thesis
 
 Base LLM weights carry two things: **general capabilities** (reasoning, reflection) and **memories** (facts, patterns, code idioms). Most of the parameters are memories.
