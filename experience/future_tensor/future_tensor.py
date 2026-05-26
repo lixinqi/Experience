@@ -65,6 +65,112 @@ def _storage_path_for_tensor(
     )
 
 
+def _grow_capacity_for(ft, coordinates: List[int], result: Tuple[str, "Status"]):
+    """Append result to incremental storage, grow ft_capacity_shape."""
+    shape = ft.ft_capacity_shape
+    new_shape = [max(shape[i], coordinates[i] + 1) if i < len(coordinates) else shape[i]
+                 for i in range(len(shape))]
+    if new_shape == shape:
+        return
+    axis = next((i for i in range(len(shape))
+                 if i < len(coordinates) and coordinates[i] + 1 > shape[i]), 0)
+    chunk = make_tensor([result[0]], ft.ft_static_tensor.st_relative_to)
+    ft.ft_incremental_concated_tensors.append((chunk, axis))
+    ft.ft_capacity_shape = new_shape
+
+
+def _resolve_concrete_shape(ft_shape_schema) -> List[int]:
+    """Resolve sympy schema to concrete shape (Symbol → 0)."""
+    concrete: List[int] = []
+    for dim in ft_shape_schema:
+        if isinstance(dim, (int, sympy.Integer)):
+            concrete.append(int(dim))
+        elif isinstance(dim, sympy.Symbol):
+            concrete.append(0)
+        else:
+            concrete.append(int(dim))
+    return concrete
+
+
+async def _cached_async_get_impl(ft, raw_async_get, symbolic_axes, coordinates, trajactory):
+    """Write-through cached ft_async_get. Only caches confidence results."""
+    key = tuple(coordinates)
+    if key in ft._ft_cache:
+        return ft._ft_cache[key]
+    shape = ft.ft_capacity_shape
+    if shape and len(coordinates) == len(shape) and all(
+            coordinates[i] < shape[i] for i in range(len(shape))):
+        flat_idx = _coords_to_flat(coordinates, shape)
+        coeff = ft.ft_static_tensor.data.flatten()[flat_idx].item()
+        if coeff > 0:
+            fpath = _storage_path_for_tensor(ft.ft_static_tensor, coordinates, shape)
+            if os.path.isfile(fpath):
+                with open(fpath, "r", encoding="utf-8") as f:
+                    result = (f.read(), Status.confidence(coeff))
+                ft._ft_cache[key] = result
+                return result
+    result = await raw_async_get(coordinates, trajactory)
+    if result[1].is_confidence:
+        ft._ft_cache[key] = result
+        if symbolic_axes:
+            _grow_capacity_for(ft, coordinates, result)
+    return result
+
+
+def _ft_forward_impl(ft, prompt_tensor: torch.Tensor) -> None:
+    """Materialize FutureTensor by calling ft_async_get for each pending element."""
+    if ft.ft_forwarded:
+        return
+    shape = ft.ft_capacity_shape
+    all_coordinates = [list(c) for c in itertools.product(*[range(s) for s in shape])]
+    pending = [c for c in all_coordinates
+               if ft.ft_static_tensor.data.flatten()[_coords_to_flat(c, shape)].item() <= 0]
+    if not pending:
+        ft.ft_forwarded = True
+        return
+    prompts = [_read_element(prompt_tensor, _coords_to_flat(c, shape)) for c in pending]
+
+    async def _gather():
+        return await asyncio.gather(*[ft.ft_async_get(c, p) for c, p in zip(pending, prompts)])
+
+    results = asyncio.run(_gather())
+    for coords, (content, status) in zip(pending, results):
+        flat_idx = _coords_to_flat(coords, shape)
+        ft.ft_static_tensor.data.flatten()[flat_idx] = Status.convert_status_to_float(status)
+        dst = _storage_path_for_tensor(ft.ft_static_tensor, coords, shape)
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        with open(dst, "w", encoding="utf-8") as f:
+            f.write(content)
+    ft.ft_forwarded = all(
+        ft.ft_static_tensor.data.flatten()[_coords_to_flat(c, shape)].item() > 0
+        for c in all_coordinates)
+
+
+def _ft_get_materialized_value_impl(ft, coordinates: List[int]) -> Tuple[float, str]:
+    """Look up element coefficient and file path by coordinates."""
+    shape = ft.ft_capacity_shape
+    flat_idx = _coords_to_flat(coordinates, shape)
+    coefficient = ft.ft_static_tensor.data.flatten()[flat_idx].item()
+    return (coefficient, _storage_path_for_tensor(ft.ft_static_tensor, coordinates, shape))
+
+
+def _ft_reset_materialized_value_impl(
+    ft, coordinates: List[int], coefficient: float, filepath: str, symlink: bool = False,
+) -> None:
+    """Overwrite element at coordinates with given coefficient and filepath."""
+    shape = ft.ft_capacity_shape
+    flat_idx = _coords_to_flat(coordinates, shape)
+    ft.ft_static_tensor.data.flatten()[flat_idx] = coefficient
+    dst_path = _storage_path_for_tensor(ft.ft_static_tensor, coordinates, shape)
+    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+    if symlink:
+        if os.path.exists(dst_path) or os.path.islink(dst_path):
+            os.remove(dst_path)
+        os.symlink(os.path.realpath(filepath), dst_path)
+    else:
+        shutil.copy2(filepath, dst_path)
+
+
 def _unflatten(flat_list: List[str], shape: List[int]):
     """Rebuild nested list structure from flat list given shape."""
     if not shape:
@@ -103,152 +209,33 @@ def FutureTensor(
     FutureTensor is an interface — a plain torch.Tensor of shape (), dtype bfloat16, value
     always 1. It is monkey-patched with ft_* attributes. Not a subclass of SymbolicTensor.
 
-    Status / coefficient semantics live inside ft_static_tensor and
-    ft_incremental_concated_tensors, not on the scalar itself.
-
     Args:
         relative_to: Storage root directory.
         ft_async_get: Async callable (coordinates, prompt) -> (str, Status).
         ft_shape_schema: Declared logical shape schema (list of sympy.Symbol or sympy.Integer).
-            Determines the shape of ft_static_tensor.
 
     Returns:
         A scalar torch.Tensor (shape=(), dtype=bfloat16, value=1) with ft_* attributes.
     """
     from experience.symbolic_tensor.tensor_util.make_none_tensor import make_none_tensor
 
-    # Resolve concrete shape from schema (sympy.Integer -> int, sympy.Symbol -> error)
-    concrete_shape: List[int] = []
-    for dim in ft_shape_schema:
-        if isinstance(dim, (int, sympy.Integer)):
-            concrete_shape.append(int(dim))
-        elif isinstance(dim, sympy.Symbol):
-            # Symbolic dim: use 0 for now (dynamic case — zero-sized)
-            concrete_shape.append(0)
-        else:
-            concrete_shape.append(int(dim))
-
-    # Create the scalar reference tensor (shape=(), bfloat16, value=1)
+    concrete_shape = _resolve_concrete_shape(ft_shape_schema)
+    symbolic_axes = [i for i, d in enumerate(ft_shape_schema) if isinstance(d, sympy.Symbol)]
     ft = torch.ones((), dtype=torch.bfloat16)
-
-    # Create ft_static_tensor: always a valid SymbolicTensor
-    ft_static = make_none_tensor(concrete_shape, relative_to)
-
-    # Monkey-patch ft_* attributes
-    ft.ft_static_tensor = ft_static
-    ft.ft_incremental_concated_tensors = []  # list[(SymbolicTensor, concat_axis)]
+    ft.ft_static_tensor = make_none_tensor(concrete_shape, relative_to)
+    ft.ft_incremental_concated_tensors = []
     ft.ft_shape_schema = list(ft_shape_schema)
-    ft.ft_capacity_shape = list(concrete_shape)  # must match logical view tensor shape
+    ft.ft_capacity_shape = list(concrete_shape)
     ft.ft_forwarded = False
-    ft.ft_async_get = ft_async_get
-
-    def ft_forward(prompt_tensor: torch.Tensor) -> None:
-        """Materialize this FutureTensor by calling ft_async_get for each element.
-
-        Resume-aware: skips elements that are already terminal (coefficient > 0
-        indicates confidence/success). Sets ft_forwarded = True only when ALL
-        elements are terminal.
-        """
-        if ft.ft_forwarded:
-            return
-
-        shape = ft.ft_capacity_shape
-
-        # Generate all coordinates from shape
-        all_coordinates: List[List[int]] = [
-            list(coords)
-            for coords in itertools.product(*[range(s) for s in shape])
-        ]
-
-        # Filter to elements needing execution: coefficient <= 0
-        pending = []
-        for coords in all_coordinates:
-            flat_idx = _coords_to_flat(coords, shape)
-            coeff = ft.ft_static_tensor.data.flatten()[flat_idx].item()
-            if coeff <= 0:
-                pending.append(coords)
-
-        if not pending:
-            ft.ft_forwarded = True
-            return
-
-        # Read prompts only for pending elements
-        pending_prompts: List[str] = [
-            _read_element(prompt_tensor, _coords_to_flat(coords, shape))
-            for coords in pending
-        ]
-
-        # Async call ft_async_get for each pending (coordinates, prompt) pair
-        async def _gather():
-            tasks = [
-                ft.ft_async_get(coords, prompt)
-                for coords, prompt in zip(pending, pending_prompts)
-            ]
-            return await asyncio.gather(*tasks)
-
-        results: List[Tuple[str, Status]] = asyncio.run(_gather())
-
-        # Write results per-element (preserve already-completed elements)
-        for coords, (content, status) in zip(pending, results):
-            flat_idx = _coords_to_flat(coords, shape)
-            fval = Status.convert_status_to_float(status)
-            ft.ft_static_tensor.data.flatten()[flat_idx] = fval
-
-            # Write content to storage directly
-            dst_path = _storage_path_for_tensor(ft.ft_static_tensor, coords, shape)
-            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-            with open(dst_path, "w", encoding="utf-8") as f:
-                f.write(content)
-
-        # ft_forwarded = True only when ALL elements are terminal (coefficient > 0)
-        all_terminal = all(
-            ft.ft_static_tensor.data.flatten()[_coords_to_flat(c, shape)].item() > 0
-            for c in all_coordinates
-        )
-        ft.ft_forwarded = all_terminal
-
-    ft.ft_forward = ft_forward
-
-    def ft_get_materialized_value(coordinates: List[int]) -> Tuple[float, str]:
-        """Look up element in logical view tensor by coordinates.
-
-        Returns (coefficient, element_file_path) — the bfloat16 numeric value
-        and the path to the symbolic content file on disk.
-        """
-        shape = ft.ft_capacity_shape
-        flat_idx = _coords_to_flat(coordinates, shape)
-        coefficient = ft.ft_static_tensor.data.flatten()[flat_idx].item()
-        element_file_path = _storage_path_for_tensor(ft.ft_static_tensor, coordinates, shape)
-        return (coefficient, element_file_path)
-
-    ft.ft_get_materialized_value = ft_get_materialized_value
-
-    def ft_reset_materialized_value(
-        coordinates: List[int],
-        coefficient: float,
-        filepath: str,
-        symlink: bool = False,
-    ) -> None:
-        """Overwrite element at coordinates with given coefficient and filepath.
-
-        If symlink=False, copies the file content.
-        If symlink=True, creates a symlink instead.
-        """
-        shape = ft.ft_capacity_shape
-        flat_idx = _coords_to_flat(coordinates, shape)
-        # Update coefficient in ft_static_tensor
-        ft.ft_static_tensor.data.flatten()[flat_idx] = coefficient
-        dst_path = _storage_path_for_tensor(ft.ft_static_tensor, coordinates, shape)
-        os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-        if symlink:
-            if os.path.exists(dst_path) or os.path.islink(dst_path):
-                os.remove(dst_path)
-            os.symlink(os.path.realpath(filepath), dst_path)
-        else:
-            shutil.copy2(filepath, dst_path)
-
-    ft.ft_reset_materialized_value = ft_reset_materialized_value
-
+    ft._ft_cache = {}
+    if ft_async_get is not None:
+        raw = ft_async_get
+        ft.ft_async_get = lambda c, t: _cached_async_get_impl(ft, raw, symbolic_axes, c, t)
+    else:
+        ft.ft_async_get = None
+    ft.ft_forward = lambda p: _ft_forward_impl(ft, p)
+    ft.ft_get_materialized_value = lambda c: _ft_get_materialized_value_impl(ft, c)
+    ft.ft_reset_materialized_value = lambda c, coeff, fp, symlink=False: _ft_reset_materialized_value_impl(ft, c, coeff, fp, symlink)
     return ft
 
 
@@ -386,6 +373,8 @@ if __name__ == "__main__":
         run_test("ft_incremental_concated_tensors is []", ft.ft_incremental_concated_tensors == [])
 
     # ── Test 5: FtMean ───────────────────────────────────────────────────
+
+    from experience.future_tensor.function.ft_mean import ft_mean
 
     print("Test 5: FtMean")
     with tempfile.TemporaryDirectory() as tmpdir:
