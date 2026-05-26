@@ -89,12 +89,13 @@ def ft_expert_forward(
             selected_experience_qkv_indexes_map: Dict mapping coordinates to indexes.
     """
     input_shape = input.ft_capacity_shape
+    input_schema = input.ft_shape_schema
 
     # Create prompt_tensor: same shape as input, stores prompts for backward (= st_moe.context)
     prompt_tensor = FutureTensor(
         input.ft_static_tensor.st_relative_to,
         ft_async_get=None,  # not used — written directly via st_setitem
-        ft_shape_schema=[sympy.Integer(s) for s in input_shape],
+        ft_shape_schema=list(input_schema),
     )
 
     # Mutable container for selected indexes (filled during ft_async_get)
@@ -258,7 +259,7 @@ def ft_expert_forward(
     output = FutureTensor(
         input.ft_static_tensor.st_relative_to,
         ft_expert_forward_async_get,
-        ft_shape_schema=[sympy.Integer(s) for s in input_shape],
+        ft_shape_schema=list(input_schema),
     )
 
     return output, prompt_tensor, _selected_indexes_map

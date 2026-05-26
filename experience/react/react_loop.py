@@ -4,30 +4,33 @@ ReActLoop: engine-agnostic framework loop that drives any engine.
 Composes a static DAG of FutureTensor ops:
   capture → engine_op → ft_speculative_keystroke → send_keys → post_capture
   All driven by ft_recurrent.
+
+The iteration dimension is symbolic (sympy.Symbol 'n'). All ops in the DAG
+carry [1, n] shape. Only the validator resolves n to concrete max_iters
+for ft_recurrent.
 """
 
 import os
 import tempfile
-from typing import List, Optional
+from typing import Optional
 
 import sympy
 
 from experience.future_tensor.future_tensor import FutureTensor
 from experience.future_tensor.status import Status
 from experience.future_tensor.function.ft_make_forwarded import ft_make_forwarded
+from experience.future_tensor.function.ft_expand import ft_expand
 from experience.future_tensor.function.ft_tmux_create_session import ft_tmux_create_session
 from experience.future_tensor.function.ft_tmux_send_keys import ft_tmux_send_keys
 from experience.future_tensor.function.ft_tmux_capture_pane import ft_tmux_capture_pane
 from experience.future_tensor.function.ft_sleep import ft_sleep
 from experience.future_tensor.function.ft_sequential import ft_sequential
 from experience.future_tensor.function.ft_recurrent import ft_recurrent
-from experience.future_tensor.function.ft_expand import ft_expand
 from experience.symbolic_tensor.tensor_util.make_tensor import make_tensor as st_make_tensor
 
 from experience.react.types import ReactConfig, EngineStepFn, ValidatorFn
 from experience.react.fixation import compute_fixation
 from experience.react.ft_speculative_keystroke import ft_speculative_keystroke
-
 
 
 async def _read_capture(capture_ft, coords, trajectory):
@@ -49,9 +52,10 @@ async def _call_engine(engine_step_fn, capture_text, task, tmpdir):
     return await engine_step_fn(capture_arg, fixation_arg, mail_arg, [0], task)
 
 
-def _make_engine_op(capture_ft, engine_step_fn, task, tmpdir, max_iters):
+def _make_engine_op(capture_ft, engine_step_fn, task, tmpdir):
     """Create FutureTensor op wrapping engine_step → serialized KeystrokeNode tree."""
     shape = capture_ft.ft_capacity_shape
+    schema = capture_ft.ft_shape_schema
 
     async def _engine_get(coords, trajectory):
         capture_text = await _read_capture(capture_ft, coords, trajectory)
@@ -62,15 +66,16 @@ def _make_engine_op(capture_ft, engine_step_fn, task, tmpdir, max_iters):
             return (output.plan.serialize(), Status.confidence(1.0))
         return ("", Status.self_confidence_but_failed(0.5))
 
-    engine_ft = FutureTensor(tmpdir, _engine_get,
-                             [sympy.Integer(s) for s in shape])
+    engine_ft = FutureTensor(tmpdir, _engine_get, list(schema))
     engine_ft.ft_capacity_shape = list(shape)
     engine_ft.requires_grad_(True)
     return engine_ft
 
 
-def _make_validator(body, validator_fn, max_iters, tmpdir):
-    """Create validator FutureTensor wrapping user's validator_fn."""
+def _make_validator(body, validator_fn, tmpdir):
+    """Create validator FutureTensor with symbolic iteration dim."""
+    n = sympy.Symbol("n")
+
     async def _validator_get(coords, trajectory):
         i = coords[-1]
         text, _ = await body.ft_async_get(coords, trajectory)
@@ -78,9 +83,8 @@ def _make_validator(body, validator_fn, max_iters, tmpdir):
             return (text, Status.confidence(1.0))
         return ("", Status.self_confidence_but_failed(0.5))
 
-    v = FutureTensor(tmpdir, _validator_get,
-                     [sympy.Integer(1), sympy.Integer(max_iters)])
-    v.ft_capacity_shape = [1, max_iters]
+    v = FutureTensor(tmpdir, _validator_get, [sympy.Integer(1), n])
+    v.ft_capacity_shape = [1, 0]
     v.requires_grad_(True)
     return v
 
@@ -96,10 +100,10 @@ def _setup_session(instance_ft, tmpdir):
 
 def _compose_dag(instance_ft, engine_step_fn, task, tmpdir, config):
     """Compose the static DAG, return (output_ft, prompt_tensor)."""
-    max_iters = config.max_iterations
-    expanded = ft_expand(instance_ft, [1, max_iters])
+    n = sympy.Symbol("n")
+    expanded = ft_expand(instance_ft, [sympy.Integer(1), n])
     capture = ft_tmux_capture_pane(expanded)
-    engine_op = _make_engine_op(capture, engine_step_fn, task, tmpdir, max_iters)
+    engine_op = _make_engine_op(capture, engine_step_fn, task, tmpdir)
     cmd_spec = ft_speculative_keystroke(engine_op, capture)
     send_keys = ft_tmux_send_keys(cmd_spec, expanded)
     post_capture = ft_sequential(
@@ -107,7 +111,7 @@ def _compose_dag(instance_ft, engine_step_fn, task, tmpdir, config):
         ft_tmux_capture_pane(expanded),
     )
     body = ft_sequential(send_keys, post_capture)
-    validator = _make_validator(body, config.validator_fn, max_iters, tmpdir)
+    validator = _make_validator(body, config.validator_fn, tmpdir)
     output = ft_recurrent(validator, step_budget=config.step_budget)
     prompt = st_make_tensor([task], tmpdir)
     return output, prompt
@@ -140,3 +144,4 @@ def react_loop(
     _setup_session(instance_ft, tmpdir)
     output, prompt = _compose_dag(instance_ft, engine_step_fn, task, tmpdir, config)
     return _drive_loop(output, prompt, config.max_iterations)
+

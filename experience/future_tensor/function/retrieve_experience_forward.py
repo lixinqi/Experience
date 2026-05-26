@@ -78,6 +78,7 @@ def retrieve_experience_forward(
         (experience_text_ft, selected_indexes_map)
     """
     input_shape = input.ft_capacity_shape
+    input_schema = input.ft_shape_schema
     relative_to = input.ft_static_tensor.st_relative_to
 
     _selected_indexes_map: Dict[tuple, List[torch.Tensor]] = {}
@@ -200,7 +201,7 @@ def retrieve_experience_forward(
     output = FutureTensor(
         relative_to,
         _async_get,
-        [sympy.Integer(s) for s in input_shape],
+        list(input_schema),
     )
 
     return output, _selected_indexes_map

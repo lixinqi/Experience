@@ -22,9 +22,8 @@ from typing import Awaitable, Callable, Dict, List, Optional, Tuple
 import sympy
 import torch
 
-from experience.future_tensor.future_tensor import FutureTensor, _read_element, _coords_to_flat
+from experience.future_tensor.future_tensor import FutureTensor, _coords_to_flat
 from experience.future_tensor.status import Status
-from experience.symbolic_tensor.tensor_util.st_setitem import st_setitem
 
 # Type alias for custom prompt accumulation callback
 GetNextIterPromptCallable = Callable[..., Awaitable[str]]
@@ -84,12 +83,15 @@ def recurrent_forward(
         torch.IntTensor, recurrent_state is a dict.
     """
     input_shape = input.ft_capacity_shape
+    input_schema = input.ft_shape_schema
     assert len(input_shape) >= 1, (
         f"Input must have at least 1 dim, got shape {input_shape}"
     )
 
     recurrent_dim = input_shape[-1]
     prefix_shape = input_shape[:-1]
+    prefix_schema = list(input_schema[:-1])
+    symbolic = (recurrent_dim == 0)  # symbolic last dim — grow dynamically
 
     # Initialize next_position if not provided
     if next_position is None:
@@ -97,12 +99,11 @@ def recurrent_forward(
     if recurrent_state is None:
         recurrent_state = {}
 
-    # Create prompt_tensor: same shape as input, initially empty
-    from experience.symbolic_tensor.tensor_util.make_none_tensor import make_none_tensor
+    # prompt_tensor: dynamic FutureTensor that reads from recurrent_state
     prompt_tensor = FutureTensor(
         input.ft_static_tensor.st_relative_to,
-        ft_async_get=None,  # not used — we write directly via st_setitem
-        ft_shape_schema=[sympy.Integer(s) for s in input_shape],
+        ft_async_get=None,
+        ft_shape_schema=list(input.ft_shape_schema),
     )
 
     async def recurrent_forward_async_get(
@@ -117,30 +118,28 @@ def recurrent_forward(
             flat_idx = 0
 
         start_i = next_position.flatten()[flat_idx].item()
-        end_i = recurrent_dim if step_budget is None else min(recurrent_dim, start_i + step_budget)
+        if symbolic:
+            budget = step_budget if step_budget is not None else 8
+            end_i = start_i + budget
+        else:
+            end_i = recurrent_dim if step_budget is None else min(recurrent_dim, start_i + step_budget)
 
         # Restore persisted state or initialize fresh
         state = recurrent_state.get(prefix_coords, {
             "best_output": "", "best_status": None,
             "best_scyf_value": -1.0, "accumulator": "",
+            "cur_prompt": trajactory,
         })
         best_output = state["best_output"]
         best_status = state["best_status"]
         best_scyf_value = state["best_scyf_value"]
         accumulator = state["accumulator"]
-
-        # Write initial prompt into prompt_tensor at [*coordinates, 0] only on first start
-        if start_i == 0:
-            st_setitem(prompt_tensor.ft_static_tensor, [*coordinates, 0], trajactory)
+        cur_prompt = state["cur_prompt"]
 
         last_i = start_i
-        terminal_status = None  # set if we hit a terminal status (confidence etc.)
 
         for i in range(start_i, end_i):
             last_i = i
-            # Read cur_prompt from prompt_tensor[*coordinates, i]
-            flat_prompt_idx = _coords_to_flat([*coordinates, i], input_shape)
-            cur_prompt = _read_element(prompt_tensor.ft_static_tensor, flat_prompt_idx)
 
             # Call input.ft_async_get([*coordinates, i], cur_prompt)
             cur_output, cur_output_status = await input.ft_async_get(
@@ -155,27 +154,29 @@ def recurrent_forward(
 
             # Match on cur_output_status
             if cur_output_status.is_confidence:
-                # Update position to recurrent_dim (done)
-                next_position.flatten()[flat_idx] = recurrent_dim
+                next_position.flatten()[flat_idx] = end_i
                 recurrent_state[prefix_coords] = {
                     "best_output": accumulator, "best_status": cur_output_status,
                     "best_scyf_value": best_scyf_value, "accumulator": accumulator,
+                    "cur_prompt": cur_prompt,
                 }
                 return (accumulator, cur_output_status)
 
             if cur_output_status.is_kConfidenceNotBounded:
-                next_position.flatten()[flat_idx] = recurrent_dim
+                next_position.flatten()[flat_idx] = end_i
                 recurrent_state[prefix_coords] = {
                     "best_output": accumulator, "best_status": Status.confidence(1.0),
                     "best_scyf_value": best_scyf_value, "accumulator": accumulator,
+                    "cur_prompt": cur_prompt,
                 }
                 return (accumulator, Status.confidence(1.0))
 
             if cur_output_status.is_kContextOverflow:
-                next_position.flatten()[flat_idx] = recurrent_dim
+                next_position.flatten()[flat_idx] = end_i
                 recurrent_state[prefix_coords] = {
                     "best_output": "", "best_status": Status.kContextOverflow,
                     "best_scyf_value": best_scyf_value, "accumulator": accumulator,
+                    "cur_prompt": cur_prompt,
                 }
                 return ("", Status.kContextOverflow)
 
@@ -185,17 +186,15 @@ def recurrent_forward(
                 best_output = cur_output
                 best_status = cur_output_status
 
-            # Write accumulated prompt for next iteration
-            if i < recurrent_dim - 1:
-                if get_next_iter_prompt is not None:
-                    accumulated = await get_next_iter_prompt(
-                        cur_prompt, cur_output, cur_output_status,
-                    )
-                else:
-                    accumulated = default_next_iter_prompt(
-                        cur_prompt, cur_output, i,
-                    )
-                st_setitem(prompt_tensor.ft_static_tensor, [*coordinates, i + 1], accumulated)
+            # Advance prompt for next iteration
+            if get_next_iter_prompt is not None:
+                cur_prompt = await get_next_iter_prompt(
+                    cur_prompt, cur_output, cur_output_status,
+                )
+            else:
+                cur_prompt = default_next_iter_prompt(
+                    cur_prompt, cur_output, i,
+                )
 
         # Update position after this budget slice
         next_position.flatten()[flat_idx] = last_i + 1
@@ -204,6 +203,7 @@ def recurrent_forward(
         recurrent_state[prefix_coords] = {
             "best_output": best_output, "best_status": best_status,
             "best_scyf_value": best_scyf_value, "accumulator": accumulator,
+            "cur_prompt": cur_prompt,
         }
 
         # All trials in this budget exhausted
@@ -214,7 +214,7 @@ def recurrent_forward(
     output = FutureTensor(
         input.ft_static_tensor.st_relative_to,
         recurrent_forward_async_get,
-        ft_shape_schema=[sympy.Integer(s) for s in prefix_shape],
+        ft_shape_schema=prefix_schema,
     )
     return (output, prompt_tensor, next_position, recurrent_state)
 
@@ -529,19 +529,18 @@ if __name__ == "__main__":
             return ("good", Status.confidence(0.9))
 
         inp = FutureTensor(tmpdir, simple_retry, [sympy.Integer(2)])
-        out, pt, _, _ = recurrent_forward(inp)
+        out, pt, _, rec_state = recurrent_forward(inp)
         prompt_t = st_make_tensor("start", tmpdir)
         out.ft_forward(prompt_t)
 
-        # prompt_tensor[0] should have "start" written
-        pt_elem0 = read_ft_element(pt, 0)
-        run_test("50: prompt_tensor[0] = start", pt_elem0 == "start")
-        # prompt_tensor[1] should have accumulated prompt
-        pt_elem1 = read_ft_element(pt, 1)
-        run_test("51: prompt_tensor[1] has Iteration 0",
-                 pt_elem1 is not None and "Iteration 0" in pt_elem1)
-        run_test("52: prompt_tensor[1] has bad",
-                 pt_elem1 is not None and "bad" in pt_elem1)
+        # Prompts now live in recurrent_state["cur_prompt"]
+        run_test("50: recurrent_state has prompt",
+                 ((),) and rec_state[()] is not None)
+        cur_p = rec_state[()]["cur_prompt"]
+        run_test("51: cur_prompt has Iteration 0",
+                 cur_p is not None and "Iteration 0" in cur_p)
+        run_test("52: cur_prompt has bad",
+                 cur_p is not None and "bad" in cur_p)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Multiline prompt preserved
@@ -549,13 +548,13 @@ if __name__ == "__main__":
             return ("out", Status.confidence(0.9))
 
         inp = FutureTensor(tmpdir, multiline_test, [sympy.Integer(1)])
-        out, pt, _, _ = recurrent_forward(inp)
+        out, pt, _, rec_state = recurrent_forward(inp)
         prompt_t = st_make_tensor("line1\nline2\nline3", tmpdir)
         out.ft_forward(prompt_t)
         run_test("53: multiline content", read_ft_element(out, 0) == "out")
-        pt_elem = read_ft_element(pt, 0)
-        run_test("54: multiline prompt stored",
-                 pt_elem is not None and "line1\nline2\nline3" == pt_elem)
+        cur_p = rec_state[()]["cur_prompt"]
+        run_test("54: multiline prompt in state",
+                 cur_p is not None and "line1\nline2\nline3" in cur_p)
         run_test("55: returns (output, prompt_tensor) tuple",
                  isinstance(pt, torch.Tensor))
 

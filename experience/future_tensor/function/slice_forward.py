@@ -57,6 +57,23 @@ def slice_forward(input: FutureTensor, slices: List[Union[int, slice]]) -> Futur
     # Compute output shape (drop collapsed dims)
     output_shape = [len(indices) for indices, collapsed in per_dim if not collapsed]
 
+    # Compute output schema: preserve symbolic info from input for non-collapsed dims
+    input_schema = input.ft_shape_schema
+    # Pad schema with sympy.Integer(1) if input has fewer dims (shouldn't happen for slice)
+    padded_schema = list(input_schema)
+    while len(padded_schema) < len(full_slices):
+        padded_schema.append(sympy.Integer(1))
+
+    output_schema = []
+    for d, (indices, collapsed) in enumerate(per_dim):
+        if not collapsed:
+            # If slicing takes all elements of a symbolic dim, preserve the symbol
+            # Otherwise, the result is concrete
+            if len(indices) == input_shape[d] and d < len(input_schema):
+                output_schema.append(padded_schema[d])
+            else:
+                output_schema.append(sympy.Integer(len(indices)))
+
     # Build coordinate mapping: output_coords -> input_coords
     def map_coords(out_coords: List[int]) -> List[int]:
         in_coords = []
@@ -75,7 +92,8 @@ def slice_forward(input: FutureTensor, slices: List[Union[int, slice]]) -> Futur
         original_coords = map_coords(coordinates)
         return await input.ft_async_get(original_coords, trajactory)
 
-    result = FutureTensor(input.ft_static_tensor.st_relative_to, sliced_async_get, [sympy.Integer(s) for s in output_shape])
+    result = FutureTensor(input.ft_static_tensor.st_relative_to, sliced_async_get, list(output_schema))
+    result.ft_capacity_shape = list(output_shape)
 
     # If input is already forwarded, slice the storage directly
     if input.ft_forwarded:

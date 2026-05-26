@@ -29,6 +29,7 @@ def unsqueeze_forward(input: FutureTensor, dim: int) -> FutureTensor:
             Supports negative indexing.
     """
     input_shape = input.ft_capacity_shape
+    input_schema = input.ft_shape_schema
     ndim = len(input_shape)
 
     # Normalize negative dim (allow dim in range [-(ndim+1), ndim])
@@ -38,6 +39,7 @@ def unsqueeze_forward(input: FutureTensor, dim: int) -> FutureTensor:
 
     # New shape: insert 1 at dim
     output_shape = input_shape[:dim] + [1] + input_shape[dim:]
+    output_schema = list(input_schema[:dim]) + [sympy.Integer(1)] + list(input_schema[dim:])
 
     # Coordinate mapping: remove the unsqueezed dim to get input coords
     def map_coords(out_coords: List[int]) -> List[int]:
@@ -48,7 +50,8 @@ def unsqueeze_forward(input: FutureTensor, dim: int) -> FutureTensor:
         original_coords = map_coords(coordinates)
         return await input.ft_async_get(original_coords, trajactory)
 
-    result = FutureTensor(input.ft_static_tensor.st_relative_to, unsqueezed_async_get, [sympy.Integer(s) for s in output_shape])
+    result = FutureTensor(input.ft_static_tensor.st_relative_to, unsqueezed_async_get, list(output_schema))
+    result.ft_capacity_shape = list(output_shape)
 
     # If input is already forwarded, copy storage directly
     if input.ft_forwarded:

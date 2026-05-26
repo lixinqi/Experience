@@ -2,15 +2,17 @@
 expand_forward :=
     FutureTensor
     <- FutureTensor
-    <- list[int]
+    <- list[int | sympy.Symbol]
     # inline
 
 # the same behavior with torch expand
+# When target_shape contains sympy.Symbol, the output has capacity 0 on that
+# axis (symbolic/dynamic dim). ft_async_get still maps coords back to input.
 """
 
 import itertools
 import os
-from typing import List
+from typing import List, Union
 
 import sympy
 import torch
@@ -18,19 +20,28 @@ import torch
 from experience.future_tensor.future_tensor import FutureTensor
 
 
-def expand_forward(input: FutureTensor, target_shape: List[int]) -> FutureTensor:
+def _is_symbolic(dim) -> bool:
+    """Check if a dimension is symbolic (sympy expression, not concrete int)."""
+    return isinstance(dim, sympy.Basic) and not isinstance(dim, sympy.Integer)
+
+
+def expand_forward(input: FutureTensor, target_shape: List[Union[int, sympy.Basic]]) -> FutureTensor:
     """Expand a FutureTensor -- broadcast dims of size 1 to target size.
 
     Same semantics as torch.Tensor.expand(). Dimensions of size 1 in the input
     are broadcast to the corresponding size in target_shape. Passing -1 for a
     dimension means keeping the current size.
 
+    When a target dim is a sympy.Symbol, the output has capacity 0 on that axis
+    (symbolic/dynamic dim that grows via ft_incremental_concated_tensors).
+
     Args:
         input: Source FutureTensor.
-        target_shape: Desired output shape. Must be broadcastable from input shape.
+        target_shape: Desired output shape. Use -1 to keep a dim unchanged.
+            May contain sympy.Symbol for symbolic (dynamic) dimensions.
 
     Returns:
-        A new FutureTensor with shape == target_shape.
+        A new FutureTensor with the expanded shape.
     """
     input_shape = input.ft_capacity_shape
 
@@ -43,15 +54,25 @@ def expand_forward(input: FutureTensor, target_shape: List[int]) -> FutureTensor
         )
     padded_input_shape = [1] * ndim_diff + input_shape
 
-    # Resolve -1 and validate
-    output_shape = []
+    # Resolve -1 and validate; build output_shape (capacity) and output_schema
+    output_shape = []  # concrete capacity (0 for symbolic dims)
+    output_schema = []  # preserves sympy.Symbol for symbolic dims
     for d, (t, i) in enumerate(zip(target_shape, padded_input_shape)):
-        if t == -1:
+        if _is_symbolic(t):
+            # Symbolic dim: capacity is 0, schema preserves the symbol
+            output_shape.append(0)
+            output_schema.append(t)
+        elif t == -1:
             output_shape.append(i)
+            output_schema.append(sympy.Integer(i))
         elif i == 1:
-            output_shape.append(t)
-        elif i == t:
-            output_shape.append(t)
+            t_int = int(t) if isinstance(t, sympy.Integer) else t
+            output_shape.append(t_int)
+            output_schema.append(sympy.Integer(t_int))
+        elif i == t or (isinstance(t, sympy.Integer) and int(t) == i):
+            t_int = int(t) if isinstance(t, sympy.Integer) else t
+            output_shape.append(t_int)
+            output_schema.append(sympy.Integer(t_int))
         else:
             raise ValueError(
                 f"expand: cannot expand dim {d} from size {i} to {t} "
@@ -71,18 +92,30 @@ def expand_forward(input: FutureTensor, target_shape: List[int]) -> FutureTensor
 
     async def expanded_async_get(coordinates: List[int], trajactory: str):
         original_coords = map_coords(coordinates)
+        if input.ft_forwarded:
+            coeff, filepath = input.ft_get_materialized_value(original_coords)
+            if os.path.isfile(filepath):
+                with open(filepath, "r", encoding="utf-8") as f:
+                    from experience.future_tensor.status import Status
+                    return (f.read(), Status.confidence(coeff))
+            from experience.future_tensor.status import Status
+            return ("", Status.confidence(0.0))
         return await input.ft_async_get(original_coords, trajactory)
 
     result = FutureTensor(
         input.ft_static_tensor.st_relative_to,
         expanded_async_get,
-        [sympy.Integer(s) for s in output_shape],
+        list(output_schema),
     )
+    result.ft_capacity_shape = list(output_shape)
 
-    # If input is already forwarded, copy storage directly
-    if input.ft_forwarded:
+    # If input is already forwarded AND no symbolic dims, copy storage directly
+    has_symbolic = any(_is_symbolic(t) for t in target_shape)
+    if input.ft_forwarded and not has_symbolic:
         _copy_expanded_storage(input, result, output_shape, padded_input_shape, ndim_diff)
         result.ft_forwarded = True
+    # Symbolic dims: don't mark forwarded — no concrete storage to back
+    # ft_get_materialized_value. Downstream ops use ft_async_get which works.
 
     return result
 
@@ -277,6 +310,58 @@ if __name__ == "__main__":
             run_test("non-1 dim expand raises ValueError", False)
         except ValueError:
             run_test("non-1 dim expand raises ValueError", True)
+
+    # === Group 7: Symbolic dim expand ===
+    print("\nGroup 7: Symbolic dim expand")
+
+    import asyncio
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ft = make_forwarded_ft([1], ["my_instance"], tmpdir)
+        n = sympy.Symbol("n")
+        r = expand_forward(ft, [sympy.Integer(1), n])
+        run_test("symbolic [1]->[1,n] capacity [1,0]", r.ft_capacity_shape == [1, 0])
+        run_test("symbolic schema preserved", r.ft_shape_schema == [sympy.Integer(1), n])
+        run_test("symbolic expand not forwarded (no concrete storage)", r.ft_forwarded is False)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        async def source_get(coords, trajactory):
+            return (f"src_{coords}", Status.confidence(1.0))
+
+        ft = FutureTensor(tmpdir, source_get, [sympy.Integer(1)])
+        ft.ft_forwarded = False
+        n = sympy.Symbol("n")
+        r = expand_forward(ft, [sympy.Integer(1), n])
+        run_test("symbolic lazy capacity [1,0]", r.ft_capacity_shape == [1, 0])
+        run_test("symbolic lazy not forwarded", r.ft_forwarded is False)
+
+        # ft_async_get maps [0, i] -> [0] for any i
+        result = asyncio.run(r.ft_async_get([0, 5], "prompt"))
+        run_test("symbolic [0,5] maps to [0]", result[0] == "src_[0]")
+        result2 = asyncio.run(r.ft_async_get([0, 99], "prompt"))
+        run_test("symbolic [0,99] maps to [0]", result2[0] == "src_[0]")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ft = make_forwarded_ft([3], ["x", "y", "z"], tmpdir)
+        n = sympy.Symbol("n")
+        r = expand_forward(ft, [n, 3])
+        run_test("symbolic [3]->[n,3] capacity [0,3]", r.ft_capacity_shape == [0, 3])
+        run_test("symbolic [3]->[n,3] schema", r.ft_shape_schema == [n, sympy.Integer(3)])
+        run_test("symbolic prepend not forwarded (symbolic dim)", r.ft_forwarded is False)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        async def multi_get(coords, trajactory):
+            return (f"val_{coords}", Status.confidence(1.0))
+
+        ft = FutureTensor(tmpdir, multi_get, [sympy.Integer(1), sympy.Integer(1)])
+        n = sympy.Symbol("n")
+        m = sympy.Symbol("m")
+        r = expand_forward(ft, [n, m])
+        run_test("symbolic [1,1]->[n,m] capacity [0,0]", r.ft_capacity_shape == [0, 0])
+        run_test("symbolic [1,1]->[n,m] schema", r.ft_shape_schema == [n, m])
+        # All coords map to [0,0]
+        result = asyncio.run(r.ft_async_get([7, 3], "prompt"))
+        run_test("symbolic [7,3] maps to [0,0]", result[0] == "val_[0, 0]")
 
     print(f"\n  Passed: {passed}, Failed: {failed}, Total: {passed + failed}")
     if failed == 0:

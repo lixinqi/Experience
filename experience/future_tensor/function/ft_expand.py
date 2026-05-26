@@ -7,8 +7,9 @@ FtExpand := torch.autograd.Function[
 ft_expand = FtExpand.apply
 """
 
-from typing import List
+from typing import List, Union
 
+import sympy
 import torch
 
 from experience.future_tensor.future_tensor import FutureTensor
@@ -26,7 +27,7 @@ class FtExpand(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, input: FutureTensor, target_shape: List[int]):
+    def forward(ctx, input: FutureTensor, target_shape: List[Union[int, sympy.Basic]]):
         result = expand_forward(input, target_shape)
 
         ctx.input_shape = input.ft_capacity_shape
@@ -54,15 +55,19 @@ class FtExpand(torch.autograd.Function):
         return grad_input, None
 
 
-def ft_expand(input: FutureTensor, target_shape: List[int]) -> FutureTensor:
+def ft_expand(input: FutureTensor, target_shape: List[Union[int, sympy.Basic]]) -> FutureTensor:
     """Expand (broadcast) a FutureTensor with autograd support.
 
     Same behavior as torch.Tensor.expand() -- broadcasts dimensions of size 1
     to the corresponding size in target_shape.
 
+    When target_shape contains sympy.Symbol, the output has capacity 0 on that
+    axis (symbolic/dynamic dim).
+
     Args:
         input: Source FutureTensor.
         target_shape: Desired output shape. Use -1 to keep a dim unchanged.
+            May contain sympy.Symbol for symbolic (dynamic) dimensions.
 
     Returns:
         A new FutureTensor with the expanded shape.

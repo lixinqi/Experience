@@ -91,6 +91,7 @@ def tmux_send_keys_forward(
 ) -> FutureTensor:
     """Forward: create a lazy FutureTensor whose ft_async_get sends keys to tmux."""
     shape = input_ft.ft_capacity_shape
+    schema = input_ft.ft_shape_schema
     relative_to = input_ft.ft_static_tensor.st_relative_to
     session_shape = session_name_ft.ft_capacity_shape
 
@@ -120,7 +121,7 @@ def tmux_send_keys_forward(
     result = FutureTensor(
         relative_to,
         send_async_get,
-        [sympy.Integer(s) for s in shape],
+        list(schema),
     )
     result.ft_capacity_shape = list(shape)
     return result

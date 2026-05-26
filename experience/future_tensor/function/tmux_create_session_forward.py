@@ -22,6 +22,7 @@ from experience.future_tensor.function.tmux_session import tmux_session_prefix
 def tmux_create_session_forward(input_ft: FutureTensor) -> FutureTensor:
     """Forward: create a lazy FutureTensor whose ft_async_get creates tmux sessions."""
     shape = input_ft.ft_capacity_shape
+    schema = input_ft.ft_shape_schema
     relative_to = input_ft.ft_static_tensor.st_relative_to
 
     async def tmux_async_get(coordinates: List[int], trajactory: str):
@@ -50,7 +51,7 @@ def tmux_create_session_forward(input_ft: FutureTensor) -> FutureTensor:
     result = FutureTensor(
         relative_to,
         tmux_async_get,
-        [sympy.Integer(s) for s in shape],
+        list(schema),
     )
     result.ft_capacity_shape = list(shape)
     return result

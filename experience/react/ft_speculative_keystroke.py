@@ -47,6 +47,7 @@ def ft_speculative_keystroke(
     Walks KeystrokeNode tree. Outputs keystroke if validation passes, empty if not.
     """
     shape = engine_input.ft_capacity_shape
+    schema = engine_input.ft_shape_schema
     relative_to = engine_input.ft_static_tensor.st_relative_to
     state: Dict[tuple, dict] = {}
 
@@ -92,7 +93,7 @@ def ft_speculative_keystroke(
 
     result = FutureTensor(
         relative_to, speculative_get,
-        [sympy.Integer(s) for s in shape],
+        list(schema),
     )
     result.ft_capacity_shape = list(shape)
     return result

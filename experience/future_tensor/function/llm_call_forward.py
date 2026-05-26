@@ -42,6 +42,7 @@ def llm_call_forward(
         FutureTensor whose elements are LLM response strings.
     """
     input_shape = prompt_ft.ft_capacity_shape
+    input_schema = prompt_ft.ft_shape_schema
     relative_to = prompt_ft.ft_static_tensor.st_relative_to
 
     async def _async_get(
@@ -131,7 +132,7 @@ def llm_call_forward(
     output = FutureTensor(
         relative_to,
         _async_get,
-        [sympy.Integer(s) for s in input_shape],
+        list(input_schema),
     )
 
     return output
