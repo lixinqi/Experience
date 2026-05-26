@@ -46,6 +46,19 @@ def _build_plan(fixation: Tuple[int, int], foveal: str) -> KeystrokeNode:
     return node_type
 
 
+async def _read_ft(ft: FutureTensor, coordinates: List[int]) -> str:
+    """Read text from a FutureTensor at coordinates (handles forwarded or lazy)."""
+    if ft.ft_forwarded:
+        try:
+            _, filepath = ft.ft_get_materialized_value(coordinates)
+            with open(filepath, "r", encoding="utf-8") as f:
+                return f.read()
+        except (IndexError, FileNotFoundError, OSError):
+            pass
+    text, _ = await ft.ft_async_get(coordinates, "")
+    return text
+
+
 async def engine_step(
     capture: FutureTensor,
     fixation: FutureTensor,
@@ -54,7 +67,8 @@ async def engine_step(
     task: str,
 ) -> EngineOutput:
     """Engine step per engine_step.viba contract."""
-    capture_text = ft_read(capture, coordinates)
-    fix_point = _parse_fixation(ft_read(fixation, coordinates))
+    capture_text = await _read_ft(capture, coordinates)
+    fixation_text = await _read_ft(fixation, coordinates)
+    fix_point = _parse_fixation(fixation_text)
     foveal = extract_foveal(capture_text, fix_point)
     return EngineOutput(plan=_build_plan(fix_point, foveal))

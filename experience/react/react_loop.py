@@ -33,35 +33,57 @@ from experience.react.fixation import compute_fixation
 from experience.react.ft_speculative_keystroke import ft_speculative_keystroke
 
 
-async def _read_capture(capture_ft, coords, trajectory):
-    """Read capture text from upstream FutureTensor."""
-    if capture_ft.ft_forwarded:
-        _, fpath = capture_ft.ft_get_materialized_value(coords)
-        return open(fpath).read() if os.path.isfile(fpath) else ""
-    text, _ = await capture_ft.ft_async_get(coords, trajectory)
-    return text
+def _make_fixation_op(capture_ft, tmpdir):
+    """Create FutureTensor op: capture → fixation point string.
+
+    Reads capture text at coords, computes fixation, outputs "row,col".
+    Same shape as capture_ft.
+    """
+    shape = capture_ft.ft_capacity_shape
+    schema = capture_ft.ft_shape_schema
+
+    async def _fixation_get(coords, trajectory):
+        if capture_ft.ft_forwarded:
+            _, fpath = capture_ft.ft_get_materialized_value(coords)
+            capture_text = open(fpath).read() if os.path.isfile(fpath) else ""
+        else:
+            capture_text, _ = await capture_ft.ft_async_get(coords, trajectory)
+        if not capture_text:
+            return ("0,0", Status.confidence(1.0))
+        fix = compute_fixation(capture_text, (0, 0))
+        return (f"{fix[0]},{fix[1]}", Status.confidence(1.0))
+
+    ft = FutureTensor(tmpdir, _fixation_get, list(schema))
+    ft.ft_capacity_shape = list(shape)
+    return ft
 
 
-async def _call_engine(engine_step_fn, capture_text, task, tmpdir):
-    """Package args and call engine_step, return EngineOutput."""
-    fixation = compute_fixation(capture_text, (0, 0))
-    fixation_str = f"{fixation[0]},{fixation[1]}"
-    capture_arg = ft_make_forwarded(tmpdir, [1], [capture_text])
-    fixation_arg = ft_make_forwarded(tmpdir, [1], [fixation_str])
-    mail_arg = ft_make_forwarded(tmpdir, [1], [task])
-    return await engine_step_fn(capture_arg, fixation_arg, mail_arg, [0], task)
+def _make_mail_op(task, capture_ft, tmpdir):
+    """Create FutureTensor op: mail tensor carrying the task string.
+
+    Same shape as capture_ft (broadcastable). Returns task at any coords.
+    """
+    shape = capture_ft.ft_capacity_shape
+    schema = capture_ft.ft_shape_schema
+
+    async def _mail_get(coords, trajectory):
+        return (task, Status.confidence(1.0))
+
+    ft = FutureTensor(tmpdir, _mail_get, list(schema))
+    ft.ft_capacity_shape = list(shape)
+    return ft
 
 
-def _make_engine_op(capture_ft, engine_step_fn, task, tmpdir):
-    """Create FutureTensor op wrapping engine_step → serialized KeystrokeNode tree."""
+def _make_engine_op(capture_ft, fixation_ft, mail_ft, engine_step_fn, task, tmpdir):
+    """Create FutureTensor op wrapping engine_step → serialized KeystrokeNode tree.
+
+    Passes DAG tensors + real coordinates to engine per engine_step.viba contract.
+    """
     shape = capture_ft.ft_capacity_shape
     schema = capture_ft.ft_shape_schema
 
     async def _engine_get(coords, trajectory):
-        capture_text = await _read_capture(capture_ft, coords, trajectory)
-        if not capture_text:
-            return ("", Status.self_confidence_but_failed(0.5))
-        output = await _call_engine(engine_step_fn, capture_text, task, tmpdir)
+        output = await engine_step_fn(capture_ft, fixation_ft, mail_ft, coords, task)
         if output.plan:
             return (output.plan.serialize(), Status.confidence(1.0))
         return ("", Status.self_confidence_but_failed(0.5))
@@ -103,7 +125,9 @@ def _compose_dag(instance_ft, engine_step_fn, task, tmpdir, config):
     n = sympy.Symbol("n")
     expanded = ft_expand(instance_ft, [sympy.Integer(1), n])
     capture = ft_tmux_capture_pane(expanded)
-    engine_op = _make_engine_op(capture, engine_step_fn, task, tmpdir)
+    fixation = _make_fixation_op(capture, tmpdir)
+    mail = _make_mail_op(task, capture, tmpdir)
+    engine_op = _make_engine_op(capture, fixation, mail, engine_step_fn, task, tmpdir)
     cmd_spec = ft_speculative_keystroke(engine_op, capture)
     send_keys = ft_tmux_send_keys(cmd_spec, expanded)
     post_capture = ft_sequential(
