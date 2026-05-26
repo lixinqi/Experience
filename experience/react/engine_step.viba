@@ -1,0 +1,21 @@
+KeystrokeNode :=
+   Object
+ * $current_fixation (int * int)
+ * $current_foveal str
+ * $keystrokes str
+ * $predicted_next_fixation (int * int)
+ * $predicted_next_foveal str
+ * $children list[KeystrokeNode]
+
+EngineOutput :=
+   Oneof
+ | $plan KeystrokeNode
+ | $mail str
+
+engine_step :=
+   $output EngineOutput
+<- $capture FutureTensor
+<- $fixation FutureTensor
+<- $mail FutureTensor
+<- $coordinates list[int]
+<- $task str

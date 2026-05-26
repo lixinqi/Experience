@@ -1,0 +1,18 @@
+validate_and_test :=
+	$statistics Stdout[str]
+  <- $input_repo_path ArgParse[str]
+  <- $output_repo_path ArgParse[str]
+  <- $prompt str
+  # inline
+  <- { check git_repo_path is git repo }
+  <- {
+    Check the element count of $input_repo_path/send_keys_st which is a stored symbolic tensor
+    shares the same granularity with number of git commits.
+  }
+  <- {
+    import validator_max_diff_len.py
+    validate max_diff of git_repo_path commints in [1, 16]
+  }
+  <- {
+    run $input_repo_path/main.py --prompt str --output-repo-path $output_repo_path
+  }
