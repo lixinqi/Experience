@@ -11,7 +11,7 @@ Signature (per engine_step.viba):
 from typing import List, Tuple
 
 from experience.future_tensor.future_tensor import FutureTensor
-from experience.react.types import KeystrokeNode, EngineOutput, ft_read
+from experience.react.react_types import KeystrokeNode, EngineOutput, ft_read
 from experience.react.fixation import extract_foveal
 
 

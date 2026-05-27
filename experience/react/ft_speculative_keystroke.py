@@ -14,7 +14,7 @@ import sympy
 from experience.future_tensor.future_tensor import FutureTensor
 from experience.future_tensor.status import Status
 from experience.react.fixation import extract_foveal, foveal_matches
-from experience.react.types import KeystrokeNode
+from experience.react.react_types import KeystrokeNode
 
 
 async def _read_ft(ft, coordinates, trajectory):

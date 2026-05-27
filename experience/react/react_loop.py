@@ -28,7 +28,7 @@ from experience.future_tensor.function.ft_sequential import ft_sequential
 from experience.future_tensor.function.ft_recurrent import ft_recurrent
 from experience.symbolic_tensor.tensor_util.make_tensor import make_tensor as st_make_tensor
 
-from experience.react.types import ReactConfig, EngineStepFn, ValidatorFn
+from experience.react.react_types import ReactConfig, EngineStepFn, ValidatorFn
 from experience.react.fixation import compute_fixation
 from experience.react.ft_speculative_keystroke import ft_speculative_keystroke
 

@@ -14,7 +14,7 @@ import libtmux
 from experience.future_tensor.function.tmux_session import tmux_session_prefix
 from experience.react.echo_hello_world_engine import engine_step
 from experience.react.react_loop import react_loop
-from experience.react.types import ReactConfig
+from experience.react.react_types import ReactConfig
 
 
 # ─── Source LLM env ───
