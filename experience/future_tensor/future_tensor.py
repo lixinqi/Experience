@@ -1,8 +1,18 @@
 """
 Status = Import[status].Status
 
+TensorSegmentDescription :=
+    Object
+  * $shape_before list[int]
+  * $shape_after list[int]
+  * $symbolic_tensor_path str
+
+LogicalViewDescription := list[TensorSegmentDescription]
+
 FutureTensor :=
     torch.Tensor[(), bfloat16, value=1]
+    * $ft_relative_to str
+    * $ft_tensor_uid str
     * $ft_initial_static_tensor SymbolicTensor[...]
     * $ft_incremental_concated_tensors list[($tensor SymbolicTensor[...], $concat_axis int)]
     * $ft_shape_schema list[sympy.Symbol]
@@ -12,12 +22,14 @@ FutureTensor :=
     * $ft_async_get (Awaitable[($output str, $status Status)] <- $coordinates list[int] <- $prompt str)
     * $ft_get_materialized_value (($coefficient float, $element_file_path str) <- $coordinates list[int])
     * $ft_reset_materialized_value (void <- $coordinates list[int] <- $coefficient float <- $filepath str <- $symlink bool)
+    * $ft_describe_logical_view (LogicalViewDescription <- void)
 """
 
 import asyncio
 import itertools
 import os
 import shutil
+import uuid
 from typing import Callable, Awaitable, List, Tuple
 
 import sympy
@@ -201,6 +213,39 @@ def _ft_get_materialized_value_impl(ft, coordinates: List[int]) -> Tuple[float, 
     return (coefficient, _storage_path_for_tensor(tensor, local_coords, local_shape))
 
 
+def _ft_describe_logical_view_impl(ft) -> list:
+    """Return LogicalViewDescription: list of segment descriptors.
+
+    Each segment is {shape_before, shape_after, symbolic_tensor_path}.
+    Segment 0 is the initial static tensor (shape_before = all zeros).
+    Subsequent segments are chunks in concat order.
+    """
+    segments = []
+    static_shape = list(ft.ft_initial_static_tensor.shape)
+    ndim = len(static_shape)
+
+    segments.append({
+        "shape_before": [0] * ndim,
+        "shape_after": static_shape,
+        "symbolic_tensor_path": os.path.join(
+            ft.ft_relative_to, ft.ft_initial_static_tensor.st_tensor_uid),
+    })
+
+    current_shape = list(static_shape)
+    for chunk, axis in ft.ft_incremental_concated_tensors:
+        shape_before = list(current_shape)
+        chunk_shape = list(chunk.shape)
+        current_shape[axis] += chunk_shape[axis]
+        segments.append({
+            "shape_before": shape_before,
+            "shape_after": list(current_shape),
+            "symbolic_tensor_path": os.path.join(
+                chunk.st_relative_to, chunk.st_tensor_uid),
+        })
+
+    return segments
+
+
 def _ft_reset_materialized_value_impl(
     ft, coordinates: List[int], coefficient: float, filepath: str, symlink: bool = False,
 ) -> None:
@@ -269,6 +314,8 @@ def FutureTensor(
     concrete_shape = _resolve_concrete_shape(ft_shape_schema)
     symbolic_axes = [i for i, d in enumerate(ft_shape_schema) if isinstance(d, sympy.Symbol)]
     ft = torch.ones((), dtype=torch.bfloat16)
+    ft.ft_relative_to = relative_to
+    ft.ft_tensor_uid = str(uuid.uuid4())
     ft.ft_initial_static_tensor = make_none_tensor(concrete_shape, relative_to)
     ft.ft_incremental_concated_tensors = []
     ft.ft_shape_schema = list(ft_shape_schema)
@@ -283,6 +330,7 @@ def FutureTensor(
     ft.ft_forward = lambda p: _ft_forward_impl(ft, p)
     ft.ft_get_materialized_value = lambda c: _ft_get_materialized_value_impl(ft, c)
     ft.ft_reset_materialized_value = lambda c, coeff, fp, symlink=False: _ft_reset_materialized_value_impl(ft, c, coeff, fp, symlink)
+    ft.ft_describe_logical_view = lambda: _ft_describe_logical_view_impl(ft)
     return ft
 
 
@@ -438,5 +486,53 @@ if __name__ == "__main__":
         m = ft_mean(ft)
         run_test("FtMean returns scalar", m.shape == torch.Size([]))
         run_test("FtMean value correct", abs(m.item() - 2.5) < 0.01)
+
+    # ── Test 6: ft_describe_logical_view ────────────────────────────────
+
+    print("Test 6: ft_describe_logical_view")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        n = sympy.Symbol("n")
+        ft = FutureTensor(tmpdir, None, [sympy.Integer(1), n])
+
+        # Before any growth: one segment (static with all-zero shape_before)
+        desc = ft.ft_describe_logical_view()
+        run_test("describe: 1 segment before growth", len(desc) == 1)
+        run_test("describe: static shape_before [0,0]",
+                 desc[0]["shape_before"] == [0, 0])
+        run_test("describe: static shape_after [1,0]",
+                 desc[0]["shape_after"] == [1, 0])
+        run_test("describe: static path contains tensor_uid",
+                 ft.ft_initial_static_tensor.st_tensor_uid in desc[0]["symbolic_tensor_path"])
+
+        # Append one chunk
+        chunk = make_tensor([["iter0_data"]], tmpdir)
+        ft.ft_incremental_concated_tensors.append((chunk, 1))
+        ft.ft_capacity_shape = [1, 1]
+
+        desc2 = ft.ft_describe_logical_view()
+        run_test("describe: 2 segments after 1 chunk", len(desc2) == 2)
+        run_test("describe: seg1 shape_before [1,0]",
+                 desc2[1]["shape_before"] == [1, 0])
+        run_test("describe: seg1 shape_after [1,1]",
+                 desc2[1]["shape_after"] == [1, 1])
+        run_test("describe: seg1 path contains chunk_uid",
+                 chunk.st_tensor_uid in desc2[1]["symbolic_tensor_path"])
+
+        # Append second chunk
+        chunk2 = make_tensor([["iter1_data"]], tmpdir)
+        ft.ft_incremental_concated_tensors.append((chunk2, 1))
+        ft.ft_capacity_shape = [1, 2]
+
+        desc3 = ft.ft_describe_logical_view()
+        run_test("describe: 3 segments after 2 chunks", len(desc3) == 3)
+        run_test("describe: seg2 shape_before [1,1]",
+                 desc3[2]["shape_before"] == [1, 1])
+        run_test("describe: seg2 shape_after [1,2]",
+                 desc3[2]["shape_after"] == [1, 2])
+
+        # Verify ft_relative_to and ft_tensor_uid
+        run_test("describe: ft_relative_to set", ft.ft_relative_to == tmpdir)
+        run_test("describe: ft_tensor_uid is non-empty string",
+                 isinstance(ft.ft_tensor_uid, str) and len(ft.ft_tensor_uid) > 0)
 
     print("\nAll tests completed.")
