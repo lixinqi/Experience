@@ -175,7 +175,7 @@ def llm_call_backward(ctx, grad_output) -> Optional[torch.Tensor]:
     enables requires_grad, and calls LlmCallGradFn.apply for 2nd-derivative
     support.
     """
-    if not hasattr(grad_output, "ft_static_tensor"):
+    if not hasattr(grad_output, "ft_initial_static_tensor"):
         shape: List[int] = ctx.shape
         relative_to: str = ctx.relative_to
 
@@ -187,16 +187,16 @@ def llm_call_backward(ctx, grad_output) -> Optional[torch.Tensor]:
         )
         if grad_output.numel() == 1:
             if shape:
-                ref_ft.ft_static_tensor.data.flatten().fill_(grad_output.item())
+                ref_ft.ft_initial_static_tensor.data.flatten().fill_(grad_output.item())
             else:
-                ref_ft.ft_static_tensor.data.fill_(grad_output.item())
+                ref_ft.ft_initial_static_tensor.data.fill_(grad_output.item())
         else:
-            ref_ft.ft_static_tensor.data.copy_(
-                grad_output.data.view(ref_ft.ft_static_tensor.shape)
+            ref_ft.ft_initial_static_tensor.data.copy_(
+                grad_output.data.view(ref_ft.ft_initial_static_tensor.shape)
             )
         ref_ft.ft_forwarded = True
 
-        grad_output.ft_static_tensor = ref_ft.ft_static_tensor
+        grad_output.ft_initial_static_tensor = ref_ft.ft_initial_static_tensor
         grad_output.ft_capacity_shape = ref_ft.ft_capacity_shape
         grad_output.ft_async_get = ref_ft.ft_async_get
         grad_output.ft_forwarded = ref_ft.ft_forwarded
@@ -210,8 +210,8 @@ def llm_call_backward(ctx, grad_output) -> Optional[torch.Tensor]:
 
     dispatch = get_backward_dispatcher(llm_call_backward)
     if dispatch({
-        "input": ctx.prompt_ft.ft_static_tensor,
-        "output": ctx.output_ft.ft_static_tensor,
+        "input": ctx.prompt_ft.ft_initial_static_tensor,
+        "output": ctx.output_ft.ft_initial_static_tensor,
         "llm_method": ctx.llm_method,
         "llm_env": ctx.llm_env,
     }):
@@ -219,8 +219,8 @@ def llm_call_backward(ctx, grad_output) -> Optional[torch.Tensor]:
 
     return LlmCallGradFn.apply(
         grad_output,
-        ctx.prompt_ft.ft_static_tensor,
-        ctx.output_ft.ft_static_tensor,
+        ctx.prompt_ft.ft_initial_static_tensor,
+        ctx.output_ft.ft_initial_static_tensor,
         ctx.llm_method,
         ctx.llm_env,
     )

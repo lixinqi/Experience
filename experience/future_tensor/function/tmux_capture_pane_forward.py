@@ -24,7 +24,7 @@ def tmux_capture_pane_forward(input_ft: FutureTensor) -> FutureTensor:
     """Forward: create a lazy FutureTensor whose ft_async_get captures tmux pane content."""
     shape = input_ft.ft_capacity_shape
     schema = input_ft.ft_shape_schema
-    relative_to = input_ft.ft_static_tensor.st_relative_to
+    relative_to = input_ft.ft_initial_static_tensor.st_relative_to
 
     async def capture_async_get(coordinates: List[int], trajactory: str):
         if input_ft.ft_forwarded:

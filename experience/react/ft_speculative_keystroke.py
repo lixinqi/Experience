@@ -48,7 +48,7 @@ def ft_speculative_keystroke(
     """
     shape = engine_input.ft_capacity_shape
     schema = engine_input.ft_shape_schema
-    relative_to = engine_input.ft_static_tensor.st_relative_to
+    relative_to = engine_input.ft_initial_static_tensor.st_relative_to
     state: Dict[tuple, dict] = {}
 
     async def speculative_get(coordinates: List[int], trajectory: str):

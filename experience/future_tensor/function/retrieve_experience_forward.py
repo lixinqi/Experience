@@ -79,7 +79,7 @@ def retrieve_experience_forward(
     """
     input_shape = input.ft_capacity_shape
     input_schema = input.ft_shape_schema
-    relative_to = input.ft_static_tensor.st_relative_to
+    relative_to = input.ft_initial_static_tensor.st_relative_to
 
     _selected_indexes_map: Dict[tuple, List[torch.Tensor]] = {}
     _qkv_lock = threading.Lock()
@@ -88,11 +88,11 @@ def retrieve_experience_forward(
         coordinates: List[int], trajactory: str,
     ) -> Tuple[str, Status]:
         # If already computed at this coordinate, read from disk
-        if output.ft_static_tensor.data[tuple(coordinates)].item() > 0:
+        if output.ft_initial_static_tensor.data[tuple(coordinates)].item() > 0:
             flat_idx = sum(
-                c * s for c, s in zip(coordinates, output.ft_static_tensor.stride())
+                c * s for c, s in zip(coordinates, output.ft_initial_static_tensor.stride())
             )
-            content = _read_file_content(output.ft_static_tensor, flat_idx)
+            content = _read_file_content(output.ft_initial_static_tensor, flat_idx)
             if content is not None:
                 return (content, Status.confidence(1.0))
 
@@ -105,23 +105,23 @@ def retrieve_experience_forward(
         # Materialize input at this coordinate if needed
         if (
             not input.ft_forwarded
-            and input.ft_static_tensor.data[tuple(coordinates)].item() == 0
+            and input.ft_initial_static_tensor.data[tuple(coordinates)].item() == 0
         ):
             input_content_result, input_status = await input.ft_async_get(
                 coordinates, actual_trajactory,
             )
             if input_content_result:
                 st_setitem(
-                    input.ft_static_tensor, coordinates, input_content_result,
+                    input.ft_initial_static_tensor, coordinates, input_content_result,
                     coefficient=Status.convert_status_to_float(input_status),
                 )
 
         # Read input content
-        if input.ft_static_tensor.data[tuple(coordinates)].item() > 0:
+        if input.ft_initial_static_tensor.data[tuple(coordinates)].item() > 0:
             flat_idx = sum(
-                c * s for c, s in zip(coordinates, input.ft_static_tensor.stride())
+                c * s for c, s in zip(coordinates, input.ft_initial_static_tensor.stride())
             )
-            input_content = _read_file_content(input.ft_static_tensor, flat_idx)
+            input_content = _read_file_content(input.ft_initial_static_tensor, flat_idx)
         else:
             input_content = ""
 
@@ -192,7 +192,7 @@ def retrieve_experience_forward(
         # Write-through
         if result_content:
             st_setitem(
-                output.ft_static_tensor, coordinates, result_content,
+                output.ft_initial_static_tensor, coordinates, result_content,
                 coefficient=Status.convert_status_to_float(result_status),
             )
 

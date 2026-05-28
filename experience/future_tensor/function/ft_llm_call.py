@@ -47,15 +47,15 @@ class FtLlmCall(torch.autograd.Function):
 
         # Save shape/relative_to for attr reconstruction in backward
         ctx.shape = prompt_ft.ft_capacity_shape
-        ctx.relative_to = prompt_ft.ft_static_tensor.st_relative_to
+        ctx.relative_to = prompt_ft.ft_initial_static_tensor.st_relative_to
 
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
-        # After forward + ft_forward, FutureTensors have materialized .ft_static_tensor
-        output_st = ctx.output_ft.ft_static_tensor
-        input_st = ctx.prompt_ft.ft_static_tensor
+        # After forward + ft_forward, FutureTensors have materialized .ft_initial_static_tensor
+        output_st = ctx.output_ft.ft_initial_static_tensor
+        input_st = ctx.prompt_ft.ft_initial_static_tensor
 
         # Check if input has content
         has_content = input_st.data.sum().item() > 0

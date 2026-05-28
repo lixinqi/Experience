@@ -71,7 +71,7 @@ def ft_terminal_idle_gate(
         A lazy FutureTensor with the same shape as input_ft.
     """
     shape = input_ft.ft_capacity_shape
-    relative_to = input_ft.ft_static_tensor.st_relative_to
+    relative_to = input_ft.ft_initial_static_tensor.st_relative_to
     session_shape = session_name_ft.ft_capacity_shape
 
     async def gate_get(coordinates: List[int], trajactory: str):

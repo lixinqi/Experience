@@ -3,7 +3,7 @@ Status = Import[status].Status
 
 FutureTensor :=
     torch.Tensor[(), bfloat16, value=1]
-    * $ft_static_tensor SymbolicTensor[...]
+    * $ft_initial_static_tensor SymbolicTensor[...]
     * $ft_incremental_concated_tensors list[($tensor SymbolicTensor[...], $concat_axis int)]
     * $ft_shape_schema list[sympy.Symbol]
     * $ft_capacity_shape list[int]
@@ -53,6 +53,35 @@ def _coords_to_flat(coordinates: List[int], shape: List[int]) -> int:
     return flat
 
 
+def _resolve_coords_to_tensor(ft, coordinates):
+    """Map logical coordinates to (tensor, local_coords, local_shape).
+
+    Resolves across ft_initial_static_tensor + ft_incremental_concated_tensors.
+    Assumes chunks are appended in flat-index order (sequential iteration).
+    """
+    static_shape = list(ft.ft_initial_static_tensor.shape)
+    ndim = len(static_shape)
+
+    if ndim == 0:
+        # Scalar tensor — always resolved from static tensor
+        return ft.ft_initial_static_tensor, list(coordinates), static_shape
+
+    if ndim > 0 and all(coordinates[i] < static_shape[i] for i in range(ndim)):
+        return ft.ft_initial_static_tensor, list(coordinates), static_shape
+
+    logical_flat = _coords_to_flat(coordinates, ft.ft_capacity_shape)
+    num_static = 1
+    for s in static_shape:
+        num_static *= s
+    chunk_idx = logical_flat - num_static
+
+    if chunk_idx < 0 or chunk_idx >= len(ft.ft_incremental_concated_tensors):
+        raise IndexError(f"Coordinate {coordinates} not materialized")
+    chunk, _ = ft.ft_incremental_concated_tensors[chunk_idx]
+    chunk_shape = list(chunk.shape)
+    return chunk, [0] * len(chunk_shape), chunk_shape
+
+
 def _storage_path_for_tensor(
     tensor: torch.Tensor, coordinates: List[int], shape: List[int]
 ) -> str:
@@ -74,7 +103,7 @@ def _grow_capacity_for(ft, coordinates: List[int], result: Tuple[str, "Status"])
         return
     axis = next((i for i in range(len(shape))
                  if i < len(coordinates) and coordinates[i] + 1 > shape[i]), 0)
-    chunk = make_tensor([result[0]], ft.ft_static_tensor.st_relative_to)
+    chunk = make_tensor([result[0]], ft.ft_initial_static_tensor.st_relative_to)
     ft.ft_incremental_concated_tensors.append((chunk, axis))
     ft.ft_capacity_shape = new_shape
 
@@ -100,15 +129,19 @@ async def _cached_async_get_impl(ft, raw_async_get, symbolic_axes, coordinates, 
     shape = ft.ft_capacity_shape
     if shape and len(coordinates) == len(shape) and all(
             coordinates[i] < shape[i] for i in range(len(shape))):
-        flat_idx = _coords_to_flat(coordinates, shape)
-        coeff = ft.ft_static_tensor.data.flatten()[flat_idx].item()
-        if coeff > 0:
-            fpath = _storage_path_for_tensor(ft.ft_static_tensor, coordinates, shape)
-            if os.path.isfile(fpath):
-                with open(fpath, "r", encoding="utf-8") as f:
-                    result = (f.read(), Status.confidence(coeff))
-                ft._ft_cache[key] = result
-                return result
+        try:
+            tensor, local_coords, local_shape = _resolve_coords_to_tensor(ft, coordinates)
+            flat_idx = _coords_to_flat(local_coords, local_shape)
+            coeff = tensor.data.flatten()[flat_idx].item()
+            if coeff > 0:
+                fpath = _storage_path_for_tensor(tensor, local_coords, local_shape)
+                if os.path.isfile(fpath):
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        result = (f.read(), Status.confidence(coeff))
+                    ft._ft_cache[key] = result
+                    return result
+        except IndexError:
+            pass
     result = await raw_async_get(coordinates, trajactory)
     if result[1].is_confidence:
         ft._ft_cache[key] = result
@@ -123,8 +156,14 @@ def _ft_forward_impl(ft, prompt_tensor: torch.Tensor) -> None:
         return
     shape = ft.ft_capacity_shape
     all_coordinates = [list(c) for c in itertools.product(*[range(s) for s in shape])]
-    pending = [c for c in all_coordinates
-               if ft.ft_static_tensor.data.flatten()[_coords_to_flat(c, shape)].item() <= 0]
+    pending: List[List[int]] = []
+    for c in all_coordinates:
+        try:
+            t, lc, ls = _resolve_coords_to_tensor(ft, c)
+            if t.data.flatten()[_coords_to_flat(lc, ls)].item() <= 0:
+                pending.append(c)
+        except IndexError:
+            pending.append(c)
     if not pending:
         ft.ft_forwarded = True
         return
@@ -135,33 +174,41 @@ def _ft_forward_impl(ft, prompt_tensor: torch.Tensor) -> None:
 
     results = asyncio.run(_gather())
     for coords, (content, status) in zip(pending, results):
-        flat_idx = _coords_to_flat(coords, shape)
-        ft.ft_static_tensor.data.flatten()[flat_idx] = Status.convert_status_to_float(status)
-        dst = _storage_path_for_tensor(ft.ft_static_tensor, coords, shape)
+        tensor, local_coords, local_shape = _resolve_coords_to_tensor(ft, coords)
+        flat_idx = _coords_to_flat(local_coords, local_shape)
+        tensor.data.flatten()[flat_idx] = Status.convert_status_to_float(status)
+        dst = _storage_path_for_tensor(tensor, local_coords, local_shape)
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         with open(dst, "w", encoding="utf-8") as f:
             f.write(content)
-    ft.ft_forwarded = all(
-        ft.ft_static_tensor.data.flatten()[_coords_to_flat(c, shape)].item() > 0
-        for c in all_coordinates)
+    ft.ft_forwarded = True
+    for c in all_coordinates:
+        try:
+            t, lc, ls = _resolve_coords_to_tensor(ft, c)
+            if t.data.flatten()[_coords_to_flat(lc, ls)].item() <= 0:
+                ft.ft_forwarded = False
+                break
+        except IndexError:
+            ft.ft_forwarded = False
+            break
 
 
 def _ft_get_materialized_value_impl(ft, coordinates: List[int]) -> Tuple[float, str]:
     """Look up element coefficient and file path by coordinates."""
-    shape = ft.ft_capacity_shape
-    flat_idx = _coords_to_flat(coordinates, shape)
-    coefficient = ft.ft_static_tensor.data.flatten()[flat_idx].item()
-    return (coefficient, _storage_path_for_tensor(ft.ft_static_tensor, coordinates, shape))
+    tensor, local_coords, local_shape = _resolve_coords_to_tensor(ft, coordinates)
+    flat_idx = _coords_to_flat(local_coords, local_shape)
+    coefficient = tensor.data.flatten()[flat_idx].item()
+    return (coefficient, _storage_path_for_tensor(tensor, local_coords, local_shape))
 
 
 def _ft_reset_materialized_value_impl(
     ft, coordinates: List[int], coefficient: float, filepath: str, symlink: bool = False,
 ) -> None:
     """Overwrite element at coordinates with given coefficient and filepath."""
-    shape = ft.ft_capacity_shape
-    flat_idx = _coords_to_flat(coordinates, shape)
-    ft.ft_static_tensor.data.flatten()[flat_idx] = coefficient
-    dst_path = _storage_path_for_tensor(ft.ft_static_tensor, coordinates, shape)
+    tensor, local_coords, local_shape = _resolve_coords_to_tensor(ft, coordinates)
+    flat_idx = _coords_to_flat(local_coords, local_shape)
+    tensor.data.flatten()[flat_idx] = coefficient
+    dst_path = _storage_path_for_tensor(tensor, local_coords, local_shape)
     os.makedirs(os.path.dirname(dst_path), exist_ok=True)
     if symlink:
         if os.path.exists(dst_path) or os.path.islink(dst_path):
@@ -222,7 +269,7 @@ def FutureTensor(
     concrete_shape = _resolve_concrete_shape(ft_shape_schema)
     symbolic_axes = [i for i, d in enumerate(ft_shape_schema) if isinstance(d, sympy.Symbol)]
     ft = torch.ones((), dtype=torch.bfloat16)
-    ft.ft_static_tensor = make_none_tensor(concrete_shape, relative_to)
+    ft.ft_initial_static_tensor = make_none_tensor(concrete_shape, relative_to)
     ft.ft_incremental_concated_tensors = []
     ft.ft_shape_schema = list(ft_shape_schema)
     ft.ft_capacity_shape = list(concrete_shape)
@@ -256,13 +303,13 @@ def _tensor_to_future(tensor: torch.Tensor, reference_ft) -> torch.Tensor:
     from experience.symbolic_tensor.tensor_util.make_none_tensor import make_none_tensor
 
     shape = list(tensor.shape)
-    relative_to = reference_ft.ft_static_tensor.st_relative_to
+    relative_to = reference_ft.ft_initial_static_tensor.st_relative_to
 
     async def dummy_get(coords, trajactory):
         return ("", Status.confidence(0.0))
 
     ft = FutureTensor(relative_to, dummy_get, [sympy.Integer(s) for s in shape])
-    ft.ft_static_tensor.data.copy_(tensor.data)
+    ft.ft_initial_static_tensor.data.copy_(tensor.data)
     ft.ft_forwarded = True
     return ft
 
@@ -306,19 +353,19 @@ if __name__ == "__main__":
         run_test("FT dtype is bfloat16", ft.dtype == torch.bfloat16)
         run_test("FT value is 1", ft.item() == 1.0)
         run_test("ft_capacity_shape is [3]", ft.ft_capacity_shape == [3])
-        run_test("ft_static_tensor shape is [3]", list(ft.ft_static_tensor.shape) == [3])
+        run_test("ft_initial_static_tensor shape is [3]", list(ft.ft_initial_static_tensor.shape) == [3])
         run_test("Not forwarded initially", ft.ft_forwarded is False)
 
         prompt_t = make_tensor(["prompt_0", "prompt_1", "prompt_2"], tmpdir)
         ft.ft_forward(prompt_t)
 
         run_test("Forwarded after ft_forward", ft.ft_forwarded is True)
-        run_test("Element 0", read_storage(ft.ft_static_tensor, 0) == "output([0], prompt_0)")
-        run_test("Element 1", read_storage(ft.ft_static_tensor, 1) == "output([1], prompt_1)")
-        run_test("Element 2", read_storage(ft.ft_static_tensor, 2) == "output([2], prompt_2)")
+        run_test("Element 0", read_storage(ft.ft_initial_static_tensor, 0) == "output([0], prompt_0)")
+        run_test("Element 1", read_storage(ft.ft_initial_static_tensor, 1) == "output([1], prompt_1)")
+        run_test("Element 2", read_storage(ft.ft_initial_static_tensor, 2) == "output([2], prompt_2)")
         run_test("FT value still 1 after forward", ft.item() == 1.0)
-        run_test("Status in ft_static_tensor coeff[0]",
-                 abs(ft.ft_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
+        run_test("Status in ft_initial_static_tensor coeff[0]",
+                 abs(ft.ft_initial_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
 
     # ── Test 2: ft_get_materialized_value / ft_reset_materialized_value ──
 
@@ -382,10 +429,10 @@ if __name__ == "__main__":
             return ("unused", Status.confidence(1.0))
 
         ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(4)])
-        ft.ft_static_tensor.data[0] = 1.0
-        ft.ft_static_tensor.data[1] = 2.0
-        ft.ft_static_tensor.data[2] = 3.0
-        ft.ft_static_tensor.data[3] = 4.0
+        ft.ft_initial_static_tensor.data[0] = 1.0
+        ft.ft_initial_static_tensor.data[1] = 2.0
+        ft.ft_initial_static_tensor.data[2] = 3.0
+        ft.ft_initial_static_tensor.data[3] = 4.0
         ft.ft_forwarded = True
 
         m = ft_mean(ft)

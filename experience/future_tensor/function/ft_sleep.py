@@ -21,7 +21,7 @@ class FtSleep(torch.autograd.Function):
     def forward(ctx, input_ft: FutureTensor, seconds: float):
         ctx.input_ft = input_ft
         ctx.shape = input_ft.ft_capacity_shape
-        ctx.relative_to = input_ft.ft_static_tensor.st_relative_to
+        ctx.relative_to = input_ft.ft_initial_static_tensor.st_relative_to
         return sleep_forward(input_ft, seconds)
 
     @staticmethod

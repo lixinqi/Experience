@@ -110,14 +110,14 @@ scalar value always `1`, monkey-patched with `ft_*` attributes. It is **not** a 
 ```
 FutureTensor :=
     torch.Tensor[(), bfloat16, value=1]           # scalar reference — not a SymbolicTensor
-    * ft_static_tensor        SymbolicTensor       # base storage; make_none_tensor before materialization,
+    * ft_initial_static_tensor        SymbolicTensor       # base storage; make_none_tensor before materialization,
                                                    # zero-sized tensor in dynamic cases
     * ft_incremental_concated_tensors              # list[(SymbolicTensor, concat_axis int)]
                               list[(SymbolicTensor, int)]
                                                    # appended in dynamic cases
     * ft_shape_schema         list[sympy.Symbol]   # declared shape schema (may be symbolic)
     * ft_capacity_shape       list[int]            # concrete shape; always equals
-                                                   # concat(ft_static_tensor, *ft_incremental_concated_tensors).shape
+                                                   # concat(ft_initial_static_tensor, *ft_incremental_concated_tensors).shape
     * ft_forwarded            bool
     * ft_forward              void <- prompt FutureTensor
     * ft_async_get            (str, Status) <- coordinates list[int] <- prompt str
@@ -130,7 +130,7 @@ FutureTensor :=
 
 The **logical view tensor** is always:
 ```
-concat(ft_static_tensor, *ft_incremental_concated_tensors)
+concat(ft_initial_static_tensor, *ft_incremental_concated_tensors)
 ```
 
 `Status` and coefficient semantics live inside the `SymbolicTensor`s of the logical view.
@@ -188,8 +188,8 @@ The `accumulate_output` parameter allows outputs to be accumulated across iterat
 
 `ft_recurrent` is a `torch.autograd.Function`. During the backward pass:
 
-- **`ft_static_tensor` is already materialized** (since `ft_forward` has completed).
-- The backward directly manipulates `ft_static_tensor`'s storage files.
+- **`ft_initial_static_tensor` is already materialized** (since `ft_forward` has completed).
+- The backward directly manipulates `ft_initial_static_tensor`'s storage files.
 - For all elements needing reflection, it **concurrently constructs AgentTasks** and submits them to the LLM via `TaskHandler()` in a single batch.
 - The LLM writes improved content for each element; the framework computes the `diff` and stores it as the gradient.
 
@@ -197,7 +197,7 @@ This is the essence of **"forward is lazy sequential retry; backward is eager co
 
 ### 2.5 Status: Control Flow in the Logical View
 
-`Status` encodes success/failure/retry as numeric coefficients **inside `ft_static_tensor`
+`Status` encodes success/failure/retry as numeric coefficients **inside `ft_initial_static_tensor`
 and `ft_incremental_concated_tensors`** — not on the `FutureTensor` scalar itself (which is always `1`):
 
 | Status | Meaning | Stored as float |
@@ -227,7 +227,7 @@ output, prompt_tensor = ft_recurrent(ft_input, accumulate_output=concat_fn)
 The loop is fully encoded in the capacity dimension:
 - **Loop variable `i`** = coordinate along the last dimension.
 - **Loop count** = last element of `ft_capacity_shape`.
-- **Trace (accumulated prompt history)** = files in `prompt_tensor.ft_static_tensor` at each `[*prefix, i]`.
+- **Trace (accumulated prompt history)** = files in `prompt_tensor.ft_initial_static_tensor` at each `[*prefix, i]`.
 
 The signature `ft_async_get(coordinates, prompt)` carries the trace:
 - `coordinates` tells you which retry round you're on.
@@ -259,7 +259,7 @@ def ft_unary(input_ft, fn) -> FutureTensor:
         output, status = await input_ft.ft_async_get(coords, prompt)
         return fn(coords, prompt, output, status)
     return FutureTensor(
-        input_ft.ft_static_tensor.st_relative_to,
+        input_ft.ft_initial_static_tensor.st_relative_to,
         wrapped,
         ft_shape_schema=input_ft.ft_shape_schema,
     )
@@ -274,7 +274,7 @@ def ft_unary(input_ft, fn) -> FutureTensor:
 | For loop | `for i in range(R)` | Last dim of `ft_capacity_shape` = `R` |
 | Nested loops | Outer `for` + inner `for` | `ft_capacity_shape = [..., C, R]` |
 | Loop variable `i` | Local variable | `coordinates[-1]` |
-| Trace / history | String concatenation | Files in `prompt_tensor.ft_static_tensor` |
+| Trace / history | String concatenation | Files in `prompt_tensor.ft_initial_static_tensor` |
 | Early exit | `break` | `status=confidence` |
 | Retry on failure | `continue` | `status=scbf` + prompt accumulation |
 
@@ -361,7 +361,7 @@ It is:
 **1) Agents have internal state (trace / accumulated prompt)**
 
 Each agent step depends on the traces from all prior steps. In `harness_model`:
-- The inner recurrent's `prompt_tensor.ft_static_tensor` records why `r=0` failed, feeding it into `r=1`.
+- The inner recurrent's `prompt_tensor.ft_initial_static_tensor` records why `r=0` failed, feeding it into `r=1`.
 - The outer recurrent's `accumulate_output` records the `c=0` read result as the context baseline for `c=1`.
 
 **2) Subagents must complete inside the parent agent**
@@ -378,7 +378,7 @@ Agent (outer recurrent) decides "what context to gather next"
 This nesting is **naturally encoded by dimensions**:
 - Agent step = outer recurrent coordinate `c`
 - Subagent retry = inner recurrent coordinate `r`
-- Subagent trace = files in inner `prompt_tensor.ft_static_tensor`
+- Subagent trace = files in inner `prompt_tensor.ft_initial_static_tensor`
 - Agent trace = accumulated result in outer `accumulate_output`
 
 **3) `ft_forward` provides unified materialization scheduling**
@@ -391,7 +391,7 @@ The framework only needs to iterate over `context_ft.ft_capacity_shape` coordina
 |---|---|---|
 | Execution granularity | One layer finishes all batch elements | One batch element runs all layers |
 | Loop expression | Python `for` / `while` | Last dim of `ft_capacity_shape` |
-| Trace passing | Explicit args or global state | Files in `prompt_tensor.ft_static_tensor` / `accumulate_output` |
+| Trace passing | Explicit args or global state | Files in `prompt_tensor.ft_initial_static_tensor` / `accumulate_output` |
 | Retry mechanism | Hardcoded inside Function | Handled automatically by `ft_recurrent` |
 | Agent / Subagent | Hard to express structurally | Outer / inner recurrent map naturally |
 | Scheduling | Synchronous blocking | `ft_forward` async concurrent scheduling |
@@ -421,7 +421,7 @@ Stage 1: code_context_gather
         → ft_recurrent(outer, accumulate_output) [batch]  # outer: accumulate clean context
     │
     ▼
-context_tensor [batch]   (= context_ft.ft_static_tensor)
+context_tensor [batch]   (= context_ft.ft_initial_static_tensor)
     │
     ▼
 Stage 2: code_gen
@@ -429,7 +429,7 @@ Stage 2: code_gen
         → ft_recurrent         [batch]          # generate → validate syntax → retry
     │
     ▼
-output_tensor [batch]   (= output_ft.ft_static_tensor)
+output_tensor [batch]   (= output_ft.ft_initial_static_tensor)
 ```
 
 - **C = `max_context_collects`**: maximum rounds of context gathering.
@@ -472,17 +472,17 @@ def forward(self, worktree_tensor):
 
     # Materialize
     context_ft.ft_forward(prompt_ft)
-    context_tensor = context_ft.ft_static_tensor
+    context_tensor = context_ft.ft_initial_static_tensor
 
     # Stage 2
     ft_gen = FutureTensor(tmpdir, self._make_code_gen(context_tensor, worktree_tensor),
                           ft_shape_schema=[batch_sym, L_sym])
     output_ft, _ = ft_recurrent(ft_gen)
     output_ft.ft_forward(prompt_ft)
-    return output_ft.ft_static_tensor
+    return output_ft.ft_initial_static_tensor
 ```
 
-The entire forward is a **declarative dataflow**: FutureTensor → ft_unary → ft_recurrent → ... → SymbolicTensor (via `.ft_static_tensor`).
+The entire forward is a **declarative dataflow**: FutureTensor → ft_unary → ft_recurrent → ... → SymbolicTensor (via `.ft_initial_static_tensor`).
 
 ### 5.5 Validation Results
 
@@ -498,8 +498,8 @@ On a mask-recovery task at `symbolic_tensor/tensor_util/assign_tensor.py:13-18`:
 | Layer | Core Abstraction | Key Properties |
 |---|---|---|
 | **SymbolicTensor** | Filesystem as tensor storage | Dual-channel gradients, patch-based optimization, ExperienceTensor |
-| **FutureTensor** | Scalar reference to lazy async storage | Scalar `()` bfloat16 handle; logical view via `ft_static_tensor` + incremental tensors; `ft_capacity_shape` tracks concrete shape |
-| **Future Ops** | Dimensions as control flow | For loop = last dim of `ft_capacity_shape`, trace = `prompt_tensor.ft_static_tensor`, nested recurrent |
+| **FutureTensor** | Scalar reference to lazy async storage | Scalar `()` bfloat16 handle; logical view via `ft_initial_static_tensor` + incremental tensors; `ft_capacity_shape` tracks concrete shape |
+| **Future Ops** | Dimensions as control flow | For loop = last dim of `ft_capacity_shape`, trace = `prompt_tensor.ft_initial_static_tensor`, nested recurrent |
 | **HarnessModel** | Agent orchestration | Two-stage pipeline, bootstrap read, clean accumulator, syntax validation |
 
 The core philosophy of this framework is: **encode an agent's loops, branches, and traces entirely into tensor shapes and storage** rather than hiding them in Python control flow. This makes agent behavior schedulable by the framework, traceable by autograd, and learnable by the optimizer.

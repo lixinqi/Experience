@@ -49,7 +49,7 @@ def ft_validate_ctrl(input_ft: FutureTensor) -> FutureTensor:
         validated control key name, or empty string if invalid.
     """
     shape = input_ft.ft_capacity_shape
-    relative_to = input_ft.ft_static_tensor.st_relative_to
+    relative_to = input_ft.ft_initial_static_tensor.st_relative_to
 
     async def validate_get(coordinates: List[int], trajactory: str):
         if input_ft.ft_forwarded:

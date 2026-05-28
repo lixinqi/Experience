@@ -4,12 +4,12 @@ Status = Import[status].Status
 # FutureTensor is an interface.
 # It is a plain scalar torch.Tensor (shape=(), dtype=bfloat16, value=1),
 # monkey-patched with ft_* attributes. Not a subclass of SymbolicTensor.
-# Status / coefficient semantics live inside ft_static_tensor and
+# Status / coefficient semantics live inside ft_initial_static_tensor and
 # ft_incremental_concated_tensors, not on the scalar itself.
 
 FutureTensor :=
     torch.Tensor[(), bfloat16, value=1]
-    * $ft_static_tensor SymbolicTensor[...]
+    * $ft_initial_static_tensor SymbolicTensor[...]
     * $ft_incremental_concated_tensors list[($tensor SymbolicTensor[...], $concat_axis int)]
     * $ft_shape_schema list[sympy.Symbol]
     * $ft_capacity_shape list[int]
@@ -20,6 +20,6 @@ FutureTensor :=
     * $ft_reset_materialized_value (void <- $coordinates list[int] <- $coefficient float <- $filepath str <- $symlink bool)
 
 # The logical view tensor is always:
-#   concat(ft_static_tensor, *ft_incremental_concated_tensors)
+#   concat(ft_initial_static_tensor, *ft_incremental_concated_tensors)
 # ft_capacity_shape must equal the shape of the logical view tensor.
 # ft_shape_schema may contain symbolic dims (sympy.Symbol) for static shape annotation.

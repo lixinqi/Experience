@@ -79,7 +79,7 @@ def make_forwarded_ft(shape, data_list, tmpdir):
     ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
     nested = _unflatten(data_list, shape) if shape else data_list[0]
     result_tensor = make_tensor(nested, tmpdir)
-    assign_tensor(ft.ft_static_tensor, result_tensor)
+    assign_tensor(ft.ft_initial_static_tensor, result_tensor)
     ft.ft_forwarded = True
     return ft
 
@@ -87,7 +87,7 @@ def make_forwarded_ft(shape, data_list, tmpdir):
 def make_overflow_ft(shape, data_list, tmpdir):
     """FutureTensor with kContextOverflow — exits without calling LLM."""
     ft = make_forwarded_ft(shape, data_list, tmpdir)
-    ft.ft_static_tensor.data.fill_(
+    ft.ft_initial_static_tensor.data.fill_(
         Status.convert_status_to_float(Status.kContextOverflow)
     )
     return ft
@@ -96,7 +96,7 @@ def make_overflow_ft(shape, data_list, tmpdir):
 def _condition_storage_path(ft, flat_index=0):
     digits = list(str(flat_index))
     return os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", os.path.join(*digits), "data",
     )
 
@@ -111,7 +111,7 @@ def make_condition_ft(symbol, tmpdir):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(symbol)
-    ft.ft_static_tensor.data[0] = Status.convert_status_to_float(Status.confidence(1.0))
+    ft.ft_initial_static_tensor.data[0] = Status.convert_status_to_float(Status.confidence(1.0))
     ft.ft_forwarded = True
     return ft
 

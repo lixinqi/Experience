@@ -44,7 +44,7 @@ def ft_make_forwarded(
     ft = FutureTensor(relative_to, dummy_get, [sympy.Integer(s) for s in shape])
     nested = _unflatten_data(data, shape)
     result_tensor = st_make_tensor(nested, relative_to)
-    assign_tensor(ft.ft_static_tensor, result_tensor)
+    assign_tensor(ft.ft_initial_static_tensor, result_tensor)
     ft.ft_forwarded = True
     return ft
 

@@ -14,13 +14,13 @@ pending symbolic computation.
 ```python
 ft = FutureTensor(relative_to, ft_async_get, ft_shape_schema)
 # ft is a torch.Tensor((), bfloat16, value=1)
-# ft.ft_static_tensor  -> SymbolicTensor of shape ft_capacity_shape
+# ft.ft_initial_static_tensor  -> SymbolicTensor of shape ft_capacity_shape
 # ft.ft_forwarded      -> False until ft_forward() is called
 ```
 
 It is **not a subclass of SymbolicTensor**. The scalar `1` carries no semantic meaning
 beyond "this reference exists." All status and coefficient semantics live in
-`ft_static_tensor` (a `SymbolicTensor`).
+`ft_initial_static_tensor` (a `SymbolicTensor`).
 
 ---
 
@@ -29,7 +29,7 @@ beyond "this reference exists." All status and coefficient semantics live in
 ```
 FutureTensor :=
     torch.Tensor[(), bfloat16, value=1]
-    * ft_static_tensor          SymbolicTensor[...]
+    * ft_initial_static_tensor          SymbolicTensor[...]
     * ft_incremental_concated_tensors  list[(SymbolicTensor, concat_axis: int)]
     * ft_shape_schema           list[sympy.Symbol | sympy.Integer]
     * ft_capacity_shape         list[int]
@@ -44,10 +44,10 @@ FutureTensor :=
 
 | Field | Type | Description |
 |---|---|---|
-| `ft_static_tensor` | `SymbolicTensor[...]` | Base referent. Always valid — initialized to `make_none_tensor` at construction; populated by `ft_forward`. Holds Status floats as coefficients. |
-| `ft_incremental_concated_tensors` | `list[(SymbolicTensor, int)]` | Tensors appended in dynamic cases. Logical view = `concat(ft_static_tensor, *ft_incremental_concated_tensors)`. Empty in the static case. |
+| `ft_initial_static_tensor` | `SymbolicTensor[...]` | Base referent. Always valid — initialized to `make_none_tensor` at construction; populated by `ft_forward`. Holds Status floats as coefficients. |
+| `ft_incremental_concated_tensors` | `list[(SymbolicTensor, int)]` | Tensors appended in dynamic cases. Logical view = `concat(ft_initial_static_tensor, *ft_incremental_concated_tensors)`. Empty in the static case. |
 | `ft_shape_schema` | `list[sympy.Symbol]` | Declared logical shape schema — elements may be symbolic (`sympy.Symbol`) or concrete (`sympy.Integer`). |
-| `ft_capacity_shape` | `list[int]` | Concrete shape of the logical view tensor. Must match `concat(ft_static_tensor, ...).shape`. |
+| `ft_capacity_shape` | `list[int]` | Concrete shape of the logical view tensor. Must match `concat(ft_initial_static_tensor, ...).shape`. |
 | `ft_forwarded` | `bool` | `True` once `ft_forward` has been called and all elements are materialized. |
 | `ft_async_get` | callable | Async element generator: `(coordinates, prompt) -> (str, Status)`. |
 
@@ -67,25 +67,25 @@ Materializes all elements concurrently:
 
 1. For each coordinate in `ft_capacity_shape`, reads the prompt from `prompt_tensor`.
 2. Calls `ft_async_get(coords, prompt)` for all elements via `asyncio.gather`.
-3. Writes Status floats into `ft_static_tensor.data` (coefficients).
-4. Writes content strings to disk storage under `ft_static_tensor`.
+3. Writes Status floats into `ft_initial_static_tensor.data` (coefficients).
+4. Writes content strings to disk storage under `ft_initial_static_tensor`.
 5. Sets `ft_forwarded = True`. Idempotent — subsequent calls are no-ops.
 
 ### `ft_get_materialized_value(coordinates)`
 
 Returns `(coefficient: float, filepath: str)` for the element at `coordinates` in the
-logical view tensor. `coefficient` is the bfloat16 value in `ft_static_tensor.data`.
+logical view tensor. `coefficient` is the bfloat16 value in `ft_initial_static_tensor.data`.
 
 ### `ft_reset_materialized_value(coordinates, coefficient, filepath, symlink=False)`
 
 Overwrites the element at `coordinates`. Copies the file (or symlinks if
-`symlink=True`) and updates the coefficient in `ft_static_tensor.data`.
+`symlink=True`) and updates the coefficient in `ft_initial_static_tensor.data`.
 
 ---
 
 ## Status encoding
 
-`Status` is a tagged union encoded as a float in `ft_static_tensor` coefficients:
+`Status` is a tagged union encoded as a float in `ft_initial_static_tensor` coefficients:
 
 | Variant | Float encoding | Meaning |
 |---|---|---|
@@ -94,7 +94,7 @@ Overwrites the element at `coordinates`. Copies the file (or symlinks if
 | `kConfidenceNotBounded` | `−2.0` | Error: confidence out of range |
 | `kContextOverflow` | `−3.0` | Error: context too long |
 
-The `FutureTensor` scalar itself is always `1` — it is the `ft_static_tensor`
+The `FutureTensor` scalar itself is always `1` — it is the `ft_initial_static_tensor`
 coefficients that carry Status.
 
 ---
@@ -242,7 +242,7 @@ Each `SymbolicTensor` element is a file:
 where `d0, d1, ...` are the digits of the flat index. For example, flat index `42` →
 `storage/4/2/data`.
 
-`ft_static_tensor` and the tensors in `ft_incremental_concated_tensors` share the same
+`ft_initial_static_tensor` and the tensors in `ft_incremental_concated_tensors` share the same
 `st_relative_to` root but have distinct `st_tensor_uid`s.
 
 ---
@@ -271,5 +271,5 @@ ft = FutureTensor(
 prompt_tensor = make_tensor([["p"]*3]*4, "/tmp/mystore")
 ft.ft_forward(prompt_tensor)
 # ft.ft_forwarded == True
-# ft.ft_static_tensor has content at all 12 positions
+# ft.ft_initial_static_tensor has content at all 12 positions
 ```

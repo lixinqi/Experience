@@ -87,7 +87,7 @@ def ft_tmux_speculative_complete(
       3. Bunch exhausted or screen doesn't confirm → re-pull, return first action.
     """
     shape = bunch_input.ft_capacity_shape
-    relative_to = bunch_input.ft_static_tensor.st_relative_to
+    relative_to = bunch_input.ft_initial_static_tensor.st_relative_to
 
     _state: Dict[tuple, dict] = {}
 

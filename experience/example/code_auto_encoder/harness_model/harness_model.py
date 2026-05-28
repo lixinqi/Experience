@@ -308,7 +308,7 @@ class HarnessModel(nn.Module):
         # Materialize context
         context_prompts = make_tensor(["gather context"] * batch_size, tmpdir)
         context_ft.ft_forward(context_prompts)
-        context_tensor = context_ft.ft_static_tensor
+        context_tensor = context_ft.ft_initial_static_tensor
         self.last_context_tensor = context_tensor
 
         # ── Stage 2: code_gen via ft_legacy_expert ──
@@ -318,7 +318,7 @@ class HarnessModel(nn.Module):
             self._make_context_repeater(context_tensor, worktree_tensor),
             [sympy.Integer(batch_size), sympy.Integer(self.max_codegen_steps)],
         )
-        # Materialize before ft_legacy_expert reads ft_static_tensor.
+        # Materialize before ft_legacy_expert reads ft_initial_static_tensor.
         context_broadcast_prompts = make_tensor(
             [["ctx"] * self.max_codegen_steps] * batch_size,
             tmpdir,
@@ -346,7 +346,7 @@ class HarnessModel(nn.Module):
         gen_prompts = make_tensor(["generate code"] * batch_size, tmpdir)
         output_ft.ft_forward(gen_prompts)
         self.last_output_ft = output_ft
-        return output_ft.ft_static_tensor
+        return output_ft.ft_initial_static_tensor
 
     def _make_tool_use(self, worktree_tensor: torch.Tensor):
         """Build ft_async_get for a single raw tool-use step.

@@ -220,7 +220,7 @@ def parse_terminal(text):
 # ─── Validator ───
 
 def ft_coder_validator(body, max_iters=30):
-    relative_to = body.ft_static_tensor.st_relative_to
+    relative_to = body.ft_initial_static_tensor.st_relative_to
 
     async def _get(coords, trajactory):
         i = coords[-1]
@@ -243,7 +243,7 @@ def ft_coder_validator(body, max_iters=30):
 
 def read_ft_element(ft):
     path = os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", "0", "data",
     )
     return open(path).read() if os.path.isfile(path) else None

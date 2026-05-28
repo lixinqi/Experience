@@ -103,7 +103,7 @@ if __name__ == "__main__":
     def _storage_path(ft, flat_index):
         digits = list(str(flat_index))
         return os.path.join(
-            ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+            ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
             "storage", os.path.join(*digits), "data",
         )
 
@@ -120,7 +120,7 @@ if __name__ == "__main__":
         ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
         nested = _unflatten_data(data_list, shape)
         result_tensor = st_make_tensor(nested, tmpdir)
-        assign_tensor(ft.ft_static_tensor, result_tensor)
+        assign_tensor(ft.ft_initial_static_tensor, result_tensor)
         ft.ft_forwarded = True
         return ft
 
@@ -235,7 +235,7 @@ if __name__ == "__main__":
         run_test("early return: never NOT called", "never" not in call_order)
         # The error status should propagate
         run_test("error status propagated",
-                 output.ft_static_tensor.data[0].item() < 0)
+                 output.ft_initial_static_tensor.data[0].item() < 0)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         call_order = []
@@ -254,7 +254,7 @@ if __name__ == "__main__":
         run_test("overflow early return: overflow called", "overflow" in call_order)
         run_test("overflow early return: after NOT called", "after" not in call_order)
         run_test("overflow status propagated",
-                 output.ft_static_tensor.data[0].item() == -3.0)
+                 output.ft_initial_static_tensor.data[0].item() == -3.0)
 
     # === Group 4: Autograd connectivity (tests 21-25) ===
 

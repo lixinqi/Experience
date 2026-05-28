@@ -88,7 +88,7 @@ def build_flex_pipeline(id_ft: FutureTensor, action_plan: list, tmpdir: str):
     plan_len = len(action_plan)
     # Extra iterations for the terminal to show output + prompt
     max_iters = plan_len + 10
-    relative_to = id_ft.ft_static_tensor.st_relative_to
+    relative_to = id_ft.ft_initial_static_tensor.st_relative_to
 
     # Shared step counter
     step = [0]
@@ -166,7 +166,7 @@ def build_flex_pipeline(id_ft: FutureTensor, action_plan: list, tmpdir: str):
 def read_ft_element(ft, flat_index):
     digits = list(str(flat_index))
     path = os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", os.path.join(*digits), "data",
     )
     if not os.path.isfile(path):

@@ -103,7 +103,7 @@ def make_forwarded_ft(shape, data_list, tmpdir):
     ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
     nested = _unflatten(data_list, shape) if shape else data_list[0]
     result_tensor = make_tensor(nested, tmpdir)
-    assign_tensor(ft.ft_static_tensor, result_tensor)
+    assign_tensor(ft.ft_initial_static_tensor, result_tensor)
     ft.ft_forwarded = True
     return ft
 
@@ -111,7 +111,7 @@ def make_forwarded_ft(shape, data_list, tmpdir):
 def read_ft_element(ft, flat_index):
     digits = list(str(flat_index))
     path = os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", os.path.join(*digits), "data",
     )
     if not os.path.isfile(path):

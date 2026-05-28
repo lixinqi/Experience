@@ -64,17 +64,17 @@ def build_expert_context_forward(
     """
     input_shape = input.ft_capacity_shape
     input_schema = input.ft_shape_schema
-    relative_to = input.ft_static_tensor.st_relative_to
+    relative_to = input.ft_initial_static_tensor.st_relative_to
 
     async def _async_get(
         coordinates: List[int], trajactory: str,
     ) -> Tuple[str, Status]:
         # If already computed, read from disk
-        if output.ft_static_tensor.data[tuple(coordinates)].item() > 0:
+        if output.ft_initial_static_tensor.data[tuple(coordinates)].item() > 0:
             flat_idx = sum(
-                c * s for c, s in zip(coordinates, output.ft_static_tensor.stride())
+                c * s for c, s in zip(coordinates, output.ft_initial_static_tensor.stride())
             )
-            content = _read_file_content(output.ft_static_tensor, flat_idx)
+            content = _read_file_content(output.ft_initial_static_tensor, flat_idx)
             if content is not None:
                 return (content, Status.confidence(1.0))
 
@@ -92,11 +92,11 @@ def build_expert_context_forward(
             return ("", exp_status)
 
         # Read input content (already materialized by retrieve_experience_forward)
-        if input.ft_static_tensor.data[tuple(coordinates)].item() > 0:
+        if input.ft_initial_static_tensor.data[tuple(coordinates)].item() > 0:
             flat_idx = sum(
-                c * s for c, s in zip(coordinates, input.ft_static_tensor.stride())
+                c * s for c, s in zip(coordinates, input.ft_initial_static_tensor.stride())
             )
-            input_content = _read_file_content(input.ft_static_tensor, flat_idx) or ""
+            input_content = _read_file_content(input.ft_initial_static_tensor, flat_idx) or ""
         else:
             input_content = ""
 
@@ -111,7 +111,7 @@ def build_expert_context_forward(
 
         # Write-through
         st_setitem(
-            output.ft_static_tensor, coordinates, full_prompt,
+            output.ft_initial_static_tensor, coordinates, full_prompt,
             coefficient=1.0,
         )
 

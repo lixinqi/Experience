@@ -53,7 +53,7 @@ class FtRecurrent(torch.autograd.Function):
         )
 
         # Save for backward — these are FutureTensors now, but backward will
-        # use their materialized .ft_static_tensor (symbolic tensor) after ft_forward.
+        # use their materialized .ft_initial_static_tensor (symbolic tensor) after ft_forward.
         ctx.input_ft = input
         ctx.output_ft = output
         ctx.prompt_tensor_ft = prompt_tensor
@@ -70,10 +70,10 @@ class FtRecurrent(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
         # After forward + ft_forward, the FutureTensors have materialized
-        # ft_static_tensor attributes (symbolic tensors with st_* attrs).
-        input_st = ctx.input_ft.ft_static_tensor
-        output_st = ctx.output_ft.ft_static_tensor
-        prompt_tensor_st = ctx.prompt_tensor_ft.ft_static_tensor
+        # ft_initial_static_tensor attributes (symbolic tensors with st_* attrs).
+        input_st = ctx.input_ft.ft_initial_static_tensor
+        output_st = ctx.output_ft.ft_initial_static_tensor
+        prompt_tensor_st = ctx.prompt_tensor_ft.ft_initial_static_tensor
 
         # Enable 2nd-derivative graph recording.
         if not grad_output.requires_grad:
@@ -228,14 +228,14 @@ if __name__ == "__main__":
 
         run_test("output forwarded", output.ft_forwarded is True)
         run_test("output[0] has content",
-                 read_storage(output.ft_static_tensor, 0) is not None)
-        content_0 = read_storage(output.ft_static_tensor, 0)
+                 read_storage(output.ft_initial_static_tensor, 0) is not None)
+        content_0 = read_storage(output.ft_initial_static_tensor, 0)
         run_test("output[0] = ans for first iteration",
                  content_0 is not None and "ans_" in content_0,
                  "ans_*", content_0)
         # Confidence: first iteration wins, so only iteration 0 is called per prefix
         run_test("output coeff > 0",
-                 output.ft_static_tensor.data[0].item() > 0)
+                 output.ft_initial_static_tensor.data[0].item() > 0)
 
     # ── Tests 12-14: Forward with retry (scbf) ──
     print("Tests 12-14: Forward with retry")
@@ -256,7 +256,7 @@ if __name__ == "__main__":
         output.ft_forward(output_prompts)
 
         run_test("retry: output forwarded", output.ft_forwarded is True)
-        content = read_storage(output.ft_static_tensor, 0)
+        content = read_storage(output.ft_initial_static_tensor, 0)
         run_test("retry: output is from winning iteration",
                  content is not None and "good_" in content,
                  "good_*", content)

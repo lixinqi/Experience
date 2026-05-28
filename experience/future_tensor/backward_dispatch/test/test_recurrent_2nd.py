@@ -81,7 +81,7 @@ def make_forwarded_ft(shape, data_list, tmpdir):
     ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
     nested = _unflatten(data_list, shape) if shape else data_list[0]
     result_tensor = make_tensor(nested, tmpdir)
-    assign_tensor(ft.ft_static_tensor, result_tensor)
+    assign_tensor(ft.ft_initial_static_tensor, result_tensor)
     ft.ft_forwarded = True
     return ft
 
@@ -89,7 +89,7 @@ def make_forwarded_ft(shape, data_list, tmpdir):
 def make_overflow_ft(shape, data_list, tmpdir):
     """FutureTensor with kContextOverflow — ft_recurrent exits without calling LLM."""
     ft = make_forwarded_ft(shape, data_list, tmpdir)
-    ft.ft_static_tensor.data.fill_(
+    ft.ft_initial_static_tensor.data.fill_(
         Status.convert_status_to_float(Status.kContextOverflow)
     )
     return ft

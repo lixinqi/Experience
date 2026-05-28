@@ -50,7 +50,7 @@ def unsqueeze_forward(input: FutureTensor, dim: int) -> FutureTensor:
         original_coords = map_coords(coordinates)
         return await input.ft_async_get(original_coords, trajactory)
 
-    result = FutureTensor(input.ft_static_tensor.st_relative_to, unsqueezed_async_get, list(output_schema))
+    result = FutureTensor(input.ft_initial_static_tensor.st_relative_to, unsqueezed_async_get, list(output_schema))
     result.ft_capacity_shape = list(output_shape)
 
     # If input is already forwarded, copy storage directly
@@ -83,7 +83,7 @@ def _copy_unsqueezed_storage(input, output, output_shape, dim):
             os.makedirs(os.path.dirname(dst_path), exist_ok=True)
             shutil.copy2(src_path, dst_path)
             # Copy coefficient (confidence) from input
-            output.ft_static_tensor.data.flatten()[out_flat] = input.ft_static_tensor.data.flatten()[in_flat]
+            output.ft_initial_static_tensor.data.flatten()[out_flat] = input.ft_initial_static_tensor.data.flatten()[in_flat]
 
 
 def _coords_to_flat(coordinates: List[int], shape: List[int]) -> int:
@@ -98,7 +98,7 @@ def _coords_to_flat(coordinates: List[int], shape: List[int]) -> int:
 def _storage_path(ft: FutureTensor, flat_index: int) -> str:
     digits = list(str(flat_index))
     return os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", os.path.join(*digits), "data",
     )
 
@@ -143,7 +143,7 @@ if __name__ == "__main__":
         ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
         nested = _unflatten_data(data_list, shape)
         result_tensor = st_make_tensor(nested, tmpdir)
-        assign_tensor(ft.ft_static_tensor, result_tensor)
+        assign_tensor(ft.ft_initial_static_tensor, result_tensor)
         ft.ft_forwarded = True
         return ft
 

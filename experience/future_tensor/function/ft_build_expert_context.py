@@ -55,14 +55,14 @@ class FtBuildExpertContext(torch.autograd.Function):
 
         # Save shape/relative_to for attr reconstruction in backward
         ctx.shape = input_ft.ft_capacity_shape
-        ctx.relative_to = input_ft.ft_static_tensor.st_relative_to
+        ctx.relative_to = input_ft.ft_initial_static_tensor.st_relative_to
 
         return output
 
     @staticmethod
     def backward(ctx, grad_output):
         # If grad_output lacks st_* attrs, wrap as TODO symbolic tensor
-        output_st = ctx.output_ft.ft_static_tensor
+        output_st = ctx.output_ft.ft_initial_static_tensor
         symbolic_grad = symbolic_grad_registry.pop(output_st.st_tensor_uid)
         if symbolic_grad is not None:
             grad_output = symbolic_grad
@@ -79,8 +79,8 @@ class FtBuildExpertContext(torch.autograd.Function):
         # 1st-derivative dispatch
         dispatch = get_backward_dispatcher(build_expert_context_backward)
         if dispatch({
-            "input": ctx.input_ft.ft_static_tensor,
-            "experience_text": ctx.experience_text_ft.ft_static_tensor,
+            "input": ctx.input_ft.ft_initial_static_tensor,
+            "experience_text": ctx.experience_text_ft.ft_initial_static_tensor,
             "output": output_st,
             "task_prompt": task_prompt_st,
         }):
@@ -90,12 +90,12 @@ class FtBuildExpertContext(torch.autograd.Function):
         grad_input = build_expert_context_backward(ctx, grad_output)
 
         # Register symbolic grad for upstream
-        input_st = ctx.input_ft.ft_static_tensor
+        input_st = ctx.input_ft.ft_initial_static_tensor
         if grad_input is not None and hasattr(input_st, "st_tensor_uid"):
             symbolic_grad_registry.register(input_st.st_tensor_uid, grad_input)
 
         # Grad also flows to experience_text (pass-through)
-        exp_text_st = ctx.experience_text_ft.ft_static_tensor
+        exp_text_st = ctx.experience_text_ft.ft_initial_static_tensor
         if grad_input is not None and hasattr(exp_text_st, "st_tensor_uid"):
             symbolic_grad_registry.register(exp_text_st.st_tensor_uid, grad_input)
 

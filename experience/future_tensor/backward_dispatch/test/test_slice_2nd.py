@@ -78,7 +78,7 @@ def make_forwarded_ft(shape, data_list, tmpdir):
     ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
     nested = _unflatten(data_list, shape) if shape else data_list[0]
     result_tensor = make_tensor(nested, tmpdir)
-    assign_tensor(ft.ft_static_tensor, result_tensor)
+    assign_tensor(ft.ft_initial_static_tensor, result_tensor)
     ft.ft_forwarded = True
     return ft
 
@@ -111,7 +111,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
     run_test("output requires_grad", output.requires_grad is True)
     run_test("output has grad_fn", output.grad_fn is not None)
     run_test("anchored is scalar FutureTensor",
-             anchored.shape == torch.Size([]) and hasattr(anchored, "ft_static_tensor"))
+             anchored.shape == torch.Size([]) and hasattr(anchored, "ft_initial_static_tensor"))
 
 
 # ══════════════════════════════════════════════════════════════════════════════

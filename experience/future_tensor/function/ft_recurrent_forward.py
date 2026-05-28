@@ -9,7 +9,7 @@ recurrent_forward :=
     # inline
     <- ($recurrent_dim int <- $input.ft_capacity_shape[-1])
     <- ($prefix_shape list[int] <- $input.ft_capacity_shape[:-1])
-    <- { prompt_tensor = FutureTensor(input.ft_static_tensor.st_relative_to, ft_async_get=None, ft_shape_schema=...) }
+    <- { prompt_tensor = FutureTensor(input.ft_initial_static_tensor.st_relative_to, ft_async_get=None, ft_shape_schema=...) }
     <- $output.ft_async_get recurrent_forward_async_get
 
 GetNextIterPromptCallable := $func (Awaitable[$ret str]
@@ -101,7 +101,7 @@ def recurrent_forward(
 
     # prompt_tensor: dynamic FutureTensor that reads from recurrent_state
     prompt_tensor = FutureTensor(
-        input.ft_static_tensor.st_relative_to,
+        input.ft_initial_static_tensor.st_relative_to,
         ft_async_get=None,
         ft_shape_schema=list(input.ft_shape_schema),
     )
@@ -212,7 +212,7 @@ def recurrent_forward(
         return (best_output, best_status)
 
     output = FutureTensor(
-        input.ft_static_tensor.st_relative_to,
+        input.ft_initial_static_tensor.st_relative_to,
         recurrent_forward_async_get,
         ft_shape_schema=prefix_schema,
     )
@@ -248,7 +248,7 @@ if __name__ == "__main__":
     def _storage_path(ft, flat_index):
         digits = list(str(flat_index))
         return os.path.join(
-            ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+            ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
             "storage", os.path.join(*digits), "data",
         )
 
@@ -279,7 +279,7 @@ if __name__ == "__main__":
         run_test("4: forwarded", out.ft_forwarded is True)
         run_test("5: content", read_ft_element(out, 0) == "hello world")
         run_test("6: confidence 0.9",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # shape: (3,) -> prefix (), recurrent_dim=3, confidence on first
@@ -292,7 +292,7 @@ if __name__ == "__main__":
         prompt_t = st_make_tensor("p", tmpdir)
         out.ft_forward(prompt_t)
         run_test("8: content from i=0", read_ft_element(out, 0) == "result_0")
-        run_test("9: confidence 0.8", abs(out.ft_static_tensor.data.flatten()[0].item() - 0.8) < 0.01)
+        run_test("9: confidence 0.8", abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 0.8) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # prefix [2], recurrent_dim=1 -> shape [2, 1]
@@ -326,7 +326,7 @@ if __name__ == "__main__":
 
         run_test("11: content is good_output", read_ft_element(out, 0) == "good_output")
         run_test("12: confidence 0.95",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - 0.95) < 0.01)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 0.95) < 0.01)
 
         # Check call sequence
         run_test("13: first call is i=0", call_log[0][0] == [0])
@@ -353,7 +353,7 @@ if __name__ == "__main__":
         prompt_t = st_make_tensor("start", tmpdir)
         out.ft_forward(prompt_t)
         run_test("19: content from i=2", read_ft_element(out, 0) == "out2")
-        run_test("20: confidence 0.9", abs(out.ft_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
+        run_test("20: confidence 0.9", abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Prompt accumulates across iterations
@@ -395,7 +395,7 @@ if __name__ == "__main__":
         run_test("26: best content is output_1", read_ft_element(out, 0) == "output_1")
         # self_confidence_but_failed(0.7) -> convert_status_to_float -> -0.7
         run_test("27: stored as -0.7",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - (-0.7)) < 0.02)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - (-0.7)) < 0.02)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # All fail, best is last iteration
@@ -410,7 +410,7 @@ if __name__ == "__main__":
         # Best: i=2 -> 0.3
         run_test("28: best is out_2", read_ft_element(out, 0) == "out_2")
         run_test("29: stored as -0.3",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - (-0.3)) < 0.02)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - (-0.3)) < 0.02)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # All fail, best is first
@@ -425,7 +425,7 @@ if __name__ == "__main__":
         out.ft_forward(prompt_t)
         run_test("30: best is out_0", read_ft_element(out, 0) == "out_0")
         run_test("31: stored as -0.9",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - (-0.9)) < 0.02)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - (-0.9)) < 0.02)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # recurrent_dim=1, single fail
@@ -438,7 +438,7 @@ if __name__ == "__main__":
         out.ft_forward(prompt_t)
         run_test("32: content only_out", read_ft_element(out, 0) == "only_out")
         run_test("33: stored as -0.6",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - (-0.6)) < 0.02)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - (-0.6)) < 0.02)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # recurrent_dim=2, tied scyf — first one wins (strictly >)
@@ -452,7 +452,7 @@ if __name__ == "__main__":
         out.ft_forward(prompt_t)
         run_test("34: tied -> first wins", read_ft_element(out, 0) == "out_0")
         run_test("35: stored as -0.5",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - (-0.5)) < 0.02)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - (-0.5)) < 0.02)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # kContextOverflow returns early
@@ -466,7 +466,7 @@ if __name__ == "__main__":
         run_test("36: kContextOverflow returns empty string",
                  read_ft_element(out, 0) == "")
         run_test("37: stored as -3.0",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - (-3.0)) < 0.01)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - (-3.0)) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # kConfidenceNotBounded returns with confidence(1.0)
@@ -479,7 +479,7 @@ if __name__ == "__main__":
         out.ft_forward(prompt_t)
         run_test("38: kConfidenceNotBounded content", read_ft_element(out, 0) == "unbounded_output")
         run_test("39: stored as 1.0 (confidence)",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - 1.0) < 0.01)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 1.0) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Shape assertion: at least 1 dim
@@ -582,7 +582,7 @@ if __name__ == "__main__":
         run_test("60: elem 2 content", read_ft_element(out, 2) == "p2_good")
         for i in range(3):
             run_test(f"61+{i}: elem {i} conf 0.9",
-                     abs(out.ft_static_tensor.data.flatten()[i].item() - 0.9) < 0.01)
+                     abs(out.ft_initial_static_tensor.data.flatten()[i].item() - 0.9) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # prefix [2, 2], recurrent_dim=1 -> shape [2, 2, 1]
@@ -618,13 +618,13 @@ if __name__ == "__main__":
         out.ft_forward(prompt_t)
 
         run_test("70: elem 0 Ok at i=0", read_ft_element(out, 0) == "e0_i0")
-        run_test("71: elem 0 conf 0.9", abs(out.ft_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
+        run_test("71: elem 0 conf 0.9", abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
         run_test("72: elem 1 Ok at i=2", read_ft_element(out, 1) == "e1_i2")
         run_test("73: elem 2 Ok at i=1", read_ft_element(out, 2) == "e2_i1")
         # elem 3: all fail, best scyf = i=2 (0.5), stored as -0.5
         run_test("74: elem 3 all fail best i=2", read_ft_element(out, 3) == "e3_i2")
         run_test("75: elem 3 stored as scyf -0.5",
-                 abs(out.ft_static_tensor.data.flatten()[3].item() - (-0.5)) < 0.02)
+                 abs(out.ft_initial_static_tensor.data.flatten()[3].item() - (-0.5)) < 0.02)
 
     # === Group 6: recurrent_dim=1 edge case (tests 76-82) ===
 
@@ -638,7 +638,7 @@ if __name__ == "__main__":
         prompt_t = st_make_tensor("p", tmpdir)
         out.ft_forward(prompt_t)
         run_test("77: content", read_ft_element(out, 0) == "result")
-        run_test("78: conf 0.85", abs(out.ft_static_tensor.data.flatten()[0].item() - 0.85) < 0.01)
+        run_test("78: conf 0.85", abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 0.85) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         async def single_err(coords, prompt):
@@ -650,7 +650,7 @@ if __name__ == "__main__":
         out.ft_forward(prompt_t)
         run_test("79: single fail content", read_ft_element(out, 0) == "result")
         run_test("80: stored as -0.7",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - (-0.7)) < 0.02)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - (-0.7)) < 0.02)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # recurrent_dim=5
@@ -702,7 +702,7 @@ if __name__ == "__main__":
         run_test("84: FIXED propagated via output accumulation",
                  read_ft_element(out, 0) == "gen_1")
         run_test("85: conf 0.9",
-                 abs(out.ft_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
+                 abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         async def prompt_dependent3(coords, prompt):
@@ -715,7 +715,7 @@ if __name__ == "__main__":
         prompt_t = st_make_tensor("FIXED already", tmpdir)
         out.ft_forward(prompt_t)
         run_test("86: Ok on i=0 with FIXED in initial", read_ft_element(out, 0) == "gen")
-        run_test("87: conf 0.9", abs(out.ft_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
+        run_test("87: conf 0.9", abs(out.ft_initial_static_tensor.data.flatten()[0].item() - 0.9) < 0.01)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Each element gets its own prompt

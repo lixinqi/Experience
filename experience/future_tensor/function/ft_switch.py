@@ -33,8 +33,8 @@ class FtSwitch(torch.autograd.Function):
         flat = 0
         digits = list(str(flat))
         path = os.path.join(
-            condition.ft_static_tensor.st_relative_to,
-            condition.ft_static_tensor.st_tensor_uid,
+            condition.ft_initial_static_tensor.st_relative_to,
+            condition.ft_initial_static_tensor.st_tensor_uid,
             "storage", os.path.join(*digits), "data",
         )
         if not os.path.isfile(path):
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     def _storage_path(ft, flat_index):
         digits = list(str(flat_index))
         return os.path.join(
-            ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+            ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
             "storage", os.path.join(*digits), "data",
         )
 
@@ -166,7 +166,7 @@ if __name__ == "__main__":
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             f.write(symbol)
-        ft.ft_static_tensor.data[0] = Status.convert_status_to_float(Status.confidence(1.0))
+        ft.ft_initial_static_tensor.data[0] = Status.convert_status_to_float(Status.confidence(1.0))
         ft.ft_forwarded = True
         return ft
 
@@ -178,7 +178,7 @@ if __name__ == "__main__":
         # Pre-materialize storage so we can also read directly if needed
         nested = _unflatten_data(data_list, shape)
         result_tensor = st_make_tensor(nested, tmpdir)
-        assign_tensor(ft.ft_static_tensor, result_tensor)
+        assign_tensor(ft.ft_initial_static_tensor, result_tensor)
         ft.ft_forwarded = True
         return ft
 

@@ -115,7 +115,7 @@ if __name__ == "__main__":
         ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
         nested = _unflatten_data(data_list, shape)
         result_tensor = st_make_tensor(nested, tmpdir)
-        assign_tensor(ft.ft_static_tensor, result_tensor)
+        assign_tensor(ft.ft_initial_static_tensor, result_tensor)
         ft.ft_forwarded = True
         return ft
 

@@ -39,25 +39,25 @@ class FtUnsqueeze(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output: FutureTensor):
         # grad_output from the autograd engine may be a plain torch.Tensor.
-        if not hasattr(grad_output, "ft_static_tensor"):
+        if not hasattr(grad_output, "ft_initial_static_tensor"):
             # Reconstruct FutureTensor attributes on the EXISTING tensor so
             # that any grad_fn chain is preserved rather than severed.
             shape = getattr(ctx, "output_shape", list(grad_output.shape))
-            relative_to = ctx.input_ft.ft_static_tensor.st_relative_to
+            relative_to = ctx.input_ft.ft_initial_static_tensor.st_relative_to
             async def dummy_get(coords, trajactory):
                 return ("", Status.confidence(0.0))
             ref_ft = FutureTensor(relative_to, dummy_get, [sympy.Integer(s) for s in shape])
             if grad_output.numel() == 1:
                 if shape:
-                    ref_ft.ft_static_tensor.data.flatten().fill_(grad_output.item())
+                    ref_ft.ft_initial_static_tensor.data.flatten().fill_(grad_output.item())
                 else:
-                    ref_ft.ft_static_tensor.data.fill_(grad_output.item())
+                    ref_ft.ft_initial_static_tensor.data.fill_(grad_output.item())
             else:
-                ref_ft.ft_static_tensor.data.copy_(grad_output.data.view(ref_ft.ft_static_tensor.shape))
+                ref_ft.ft_initial_static_tensor.data.copy_(grad_output.data.view(ref_ft.ft_initial_static_tensor.shape))
             ref_ft.ft_forwarded = True
 
             # Monkey-patch attributes onto the existing grad_output tensor
-            grad_output.ft_static_tensor = ref_ft.ft_static_tensor
+            grad_output.ft_initial_static_tensor = ref_ft.ft_initial_static_tensor
             grad_output.ft_capacity_shape = ref_ft.ft_capacity_shape
             grad_output.ft_async_get = ref_ft.ft_async_get
             grad_output.ft_forwarded = ref_ft.ft_forwarded
@@ -124,7 +124,7 @@ if __name__ == "__main__":
     def _storage_path(ft, flat_index):
         digits = list(str(flat_index))
         return os.path.join(
-            ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+            ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
             "storage", os.path.join(*digits), "data",
         )
 
@@ -141,7 +141,7 @@ if __name__ == "__main__":
         ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
         nested = _unflatten_data(data_list, shape)
         result_tensor = st_make_tensor(nested, tmpdir)
-        assign_tensor(ft.ft_static_tensor, result_tensor)
+        assign_tensor(ft.ft_initial_static_tensor, result_tensor)
         ft.ft_forwarded = True
         return ft
 

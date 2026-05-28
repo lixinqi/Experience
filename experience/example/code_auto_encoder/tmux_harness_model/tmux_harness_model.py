@@ -148,7 +148,7 @@ class TmuxHarnessModel(nn.Module):
         gen_prompts = make_tensor(["generate code"] * batch_size, tmpdir)
         output_ft.ft_forward(gen_prompts)
         self.last_output_ft = output_ft
-        return output_ft.ft_static_tensor
+        return output_ft.ft_initial_static_tensor
 
     def _make_context_repeater(self, contexts: List[str]):
         """Build ft_async_get for [batch, L] that broadcasts context strings."""

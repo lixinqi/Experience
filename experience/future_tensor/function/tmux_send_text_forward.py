@@ -43,7 +43,7 @@ def tmux_send_text_forward(
     """Forward: create a lazy FutureTensor whose ft_async_get sends text to tmux."""
     shape = input_ft.ft_capacity_shape
     schema = input_ft.ft_shape_schema
-    relative_to = input_ft.ft_static_tensor.st_relative_to
+    relative_to = input_ft.ft_initial_static_tensor.st_relative_to
     session_shape = session_name_ft.ft_capacity_shape
 
     async def send_async_get(coordinates: List[int], trajactory: str):

@@ -93,7 +93,7 @@ def ft_expert_forward(
 
     # Create prompt_tensor: same shape as input, stores prompts for backward (= st_moe.context)
     prompt_tensor = FutureTensor(
-        input.ft_static_tensor.st_relative_to,
+        input.ft_initial_static_tensor.st_relative_to,
         ft_async_get=None,  # not used — written directly via st_setitem
         ft_shape_schema=list(input_schema),
     )
@@ -116,14 +116,14 @@ def ft_expert_forward(
         # 1. Store the trajactory into prompt_tensor for backward (= st_moe.context)
         if isinstance(trajactory, dict):
             trajactory = trajactory.get("trajactory", "")
-        st_setitem(prompt_tensor.ft_static_tensor, coordinates, trajactory)
+        st_setitem(prompt_tensor.ft_initial_static_tensor, coordinates, trajactory)
 
         # 2. Build scalar_input from input[coordinates] (= st_moe.input)
         #    Coefficient-based check: input is always a FutureTensor, but may be
         #    a "none tensor" with zero coefficients when first in chain.
-        if input.ft_static_tensor.data[tuple(coordinates)].item() > 0:
-            flat_idx = sum(c * s for c, s in zip(coordinates, input.ft_static_tensor.stride()))
-            input_content = _read_file_content(input.ft_static_tensor, flat_idx)
+        if input.ft_initial_static_tensor.data[tuple(coordinates)].item() > 0:
+            flat_idx = sum(c * s for c, s in zip(coordinates, input.ft_initial_static_tensor.stride()))
+            input_content = _read_file_content(input.ft_initial_static_tensor, flat_idx)
         else:
             input_content = ""
 
@@ -133,17 +133,17 @@ def ft_expert_forward(
             effective_retrieval = retrieval_method or multi_similarity
             scalar_input = make_tensor(
                 [input_content] if input_content else ["TODO"],
-                input.ft_static_tensor.st_relative_to,
+                input.ft_initial_static_tensor.st_relative_to,
             )
-            scalar_context = make_tensor([trajactory], input.ft_static_tensor.st_relative_to)
+            scalar_context = make_tensor([trajactory], input.ft_initial_static_tensor.st_relative_to)
         else:
             scalar_input = make_tensor(
                 [input_content] if input_content else ["TODO"],
-                input.ft_static_tensor.st_relative_to,
+                input.ft_initial_static_tensor.st_relative_to,
             )
 
             # 3. Build scalar_context from trajactory (= st_moe.context, requires_grad=False)
-            scalar_context = make_tensor([trajactory], input.ft_static_tensor.st_relative_to)
+            scalar_context = make_tensor([trajactory], input.ft_initial_static_tensor.st_relative_to)
 
             # 4. Get query from scalar_input
             input_query = get_query_tensor(
@@ -227,9 +227,9 @@ def ft_expert_forward(
         coordinates: List[int], trajactory: str
     ) -> Tuple[str, Status]:
         # If output already computed at this coordinate, return from disk
-        if output.ft_static_tensor.data[tuple(coordinates)].item() > 0:
-            flat_idx = sum(c * s for c, s in zip(coordinates, output.ft_static_tensor.stride()))
-            content = _read_file_content(output.ft_static_tensor, flat_idx)
+        if output.ft_initial_static_tensor.data[tuple(coordinates)].item() > 0:
+            flat_idx = sum(c * s for c, s in zip(coordinates, output.ft_initial_static_tensor.stride()))
+            content = _read_file_content(output.ft_initial_static_tensor, flat_idx)
             if content is not None:
                 return (content, Status.confidence(1.0))
 
@@ -238,10 +238,10 @@ def ft_expert_forward(
             actual_trajactory = trajactory.get("trajactory", "")
         else:
             actual_trajactory = trajactory
-        if not input.ft_forwarded and input.ft_static_tensor.data[tuple(coordinates)].item() == 0:
+        if not input.ft_forwarded and input.ft_initial_static_tensor.data[tuple(coordinates)].item() == 0:
             input_content, input_status = await input.ft_async_get(coordinates, actual_trajactory)
             if input_content:
-                st_setitem(input.ft_static_tensor, coordinates, input_content,
+                st_setitem(input.ft_initial_static_tensor, coordinates, input_content,
                            coefficient=Status.convert_status_to_float(input_status))
 
         import asyncio
@@ -252,12 +252,12 @@ def ft_expert_forward(
 
         # Write-through: persist output so downstream ops can read from this tensor
         if result_content:
-            st_setitem(output.ft_static_tensor, coordinates, result_content,
+            st_setitem(output.ft_initial_static_tensor, coordinates, result_content,
                        coefficient=Status.convert_status_to_float(result_status))
         return (result_content, result_status)
 
     output = FutureTensor(
-        input.ft_static_tensor.st_relative_to,
+        input.ft_initial_static_tensor.st_relative_to,
         ft_expert_forward_async_get,
         ft_shape_schema=list(input_schema),
     )
@@ -422,11 +422,11 @@ if __name__ == "__main__":
         output.ft_forward(output_prompts)
 
         run_test("output forwarded", output.ft_forwarded is True)
-        content_0 = read_storage(output.ft_static_tensor, 0)
+        content_0 = read_storage(output.ft_initial_static_tensor, 0)
         run_test("output[0] has content",
                  content_0 is not None and content_0.strip() != "TODO",
                  "not TODO", content_0)
-        run_test("output coeff > 0", output.ft_static_tensor.data[0].item() > 0)
+        run_test("output coeff > 0", output.ft_initial_static_tensor.data[0].item() > 0)
 
     # ── Tests 12-14: Prompt tensor stores prompts (= context) ──
     print("Tests 12-14: Prompt tensor stores prompts (context)")
@@ -452,8 +452,8 @@ if __name__ == "__main__":
         output.ft_forward(output_prompts)
 
         # prompt_tensor should have the prompts (= context) stored via st_setitem
-        pt0 = read_storage(prompt_tensor.ft_static_tensor, 0)
-        pt1 = read_storage(prompt_tensor.ft_static_tensor, 1)
+        pt0 = read_storage(prompt_tensor.ft_initial_static_tensor, 0)
+        pt1 = read_storage(prompt_tensor.ft_initial_static_tensor, 1)
         run_test("prompt_tensor[0] stored",
                  pt0 is not None,
                  "not None", pt0)
@@ -532,7 +532,7 @@ if __name__ == "__main__":
 
         run_test("3-element output forwarded", output.ft_forwarded is True)
         all_have_content = all(
-            read_storage(output.ft_static_tensor, i) is not None
+            read_storage(output.ft_initial_static_tensor, i) is not None
             for i in range(3)
         )
         run_test("all 3 elements have content", all_have_content)

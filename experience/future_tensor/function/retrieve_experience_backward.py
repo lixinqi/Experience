@@ -30,7 +30,7 @@ def retrieve_experience_backward(ctx, grad_output) -> FutureTensor:
     a gradient for experience (experience gradients come from ft_expert's
     backward, not from retrieval).
     """
-    if not hasattr(grad_output, "ft_static_tensor"):
+    if not hasattr(grad_output, "ft_initial_static_tensor"):
         shape: List[int] = ctx.shape
         relative_to: str = ctx.relative_to
 
@@ -42,16 +42,16 @@ def retrieve_experience_backward(ctx, grad_output) -> FutureTensor:
         )
         if grad_output.numel() == 1:
             if shape:
-                ref_ft.ft_static_tensor.data.flatten().fill_(grad_output.item())
+                ref_ft.ft_initial_static_tensor.data.flatten().fill_(grad_output.item())
             else:
-                ref_ft.ft_static_tensor.data.fill_(grad_output.item())
+                ref_ft.ft_initial_static_tensor.data.fill_(grad_output.item())
         else:
-            ref_ft.ft_static_tensor.data.copy_(
-                grad_output.data.view(ref_ft.ft_static_tensor.shape)
+            ref_ft.ft_initial_static_tensor.data.copy_(
+                grad_output.data.view(ref_ft.ft_initial_static_tensor.shape)
             )
         ref_ft.ft_forwarded = True
 
-        grad_output.ft_static_tensor = ref_ft.ft_static_tensor
+        grad_output.ft_initial_static_tensor = ref_ft.ft_initial_static_tensor
         grad_output.ft_capacity_shape = ref_ft.ft_capacity_shape
         grad_output.ft_async_get = ref_ft.ft_async_get
         grad_output.ft_forwarded = ref_ft.ft_forwarded
@@ -65,8 +65,8 @@ def retrieve_experience_backward(ctx, grad_output) -> FutureTensor:
 
     dispatch = get_backward_dispatcher(retrieve_experience_backward)
     if dispatch({
-        "input": ctx.input_ft.ft_static_tensor,
-        "output": ctx.output_ft.ft_static_tensor,
+        "input": ctx.input_ft.ft_initial_static_tensor,
+        "output": ctx.output_ft.ft_initial_static_tensor,
         "experience": ctx.experience,
         "indexes_map": ctx.indexes_map,
     }):
@@ -74,8 +74,8 @@ def retrieve_experience_backward(ctx, grad_output) -> FutureTensor:
 
     return RetrieveExperienceGradFn.apply(
         grad_output,
-        ctx.input_ft.ft_static_tensor,
-        ctx.output_ft.ft_static_tensor,
+        ctx.input_ft.ft_initial_static_tensor,
+        ctx.output_ft.ft_initial_static_tensor,
         ctx.experience,
         ctx.indexes_map,
     )

@@ -80,7 +80,7 @@ def switch_forward(
         return await selected_branch.ft_async_get(coordinates, trajactory)
 
     result = FutureTensor(
-        branches[0].ft_static_tensor.st_relative_to,
+        branches[0].ft_initial_static_tensor.st_relative_to,
         switch_async_get,
         branches[0].ft_shape_schema,
     )

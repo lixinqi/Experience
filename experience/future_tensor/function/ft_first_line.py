@@ -27,7 +27,7 @@ def ft_first_line(input_ft: FutureTensor) -> FutureTensor:
         or empty string if no non-empty line exists.
     """
     shape = input_ft.ft_capacity_shape
-    relative_to = input_ft.ft_static_tensor.st_relative_to
+    relative_to = input_ft.ft_initial_static_tensor.st_relative_to
 
     async def first_line_get(coordinates: List[int], trajactory: str):
         if input_ft.ft_forwarded:

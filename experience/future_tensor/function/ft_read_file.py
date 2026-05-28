@@ -27,7 +27,7 @@ class FtReadFile(torch.autograd.Function):
     def forward(ctx, input_ft: FutureTensor):
         ctx.input_ft = input_ft
         ctx.shape = input_ft.ft_capacity_shape
-        ctx.relative_to = input_ft.ft_static_tensor.st_relative_to
+        ctx.relative_to = input_ft.ft_initial_static_tensor.st_relative_to
         return read_file_forward(input_ft)
 
     @staticmethod
@@ -86,7 +86,7 @@ if __name__ == "__main__":
         ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
         nested = _unflatten_data(data_list, shape)
         result_tensor = st_make_tensor(nested, tmpdir)
-        assign_tensor(ft.ft_static_tensor, result_tensor)
+        assign_tensor(ft.ft_initial_static_tensor, result_tensor)
         ft.ft_forwarded = True
         return ft
 
@@ -106,7 +106,7 @@ if __name__ == "__main__":
     def _storage_path(ft, flat_index):
         digits = list(str(flat_index))
         return os.path.join(
-            ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+            ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
             "storage", os.path.join(*digits), "data",
         )
 
@@ -154,9 +154,9 @@ if __name__ == "__main__":
                  c1 is not None and "content_of_file_b" in c1,
                  "contains 'content_of_file_b'", repr(c1[:80] if c1 else None))
         run_test("confidence > 0 for elem 0",
-                 output.ft_static_tensor.data.flatten()[0].item() > 0)
+                 output.ft_initial_static_tensor.data.flatten()[0].item() > 0)
         run_test("confidence > 0 for elem 1",
-                 output.ft_static_tensor.data.flatten()[1].item() > 0)
+                 output.ft_initial_static_tensor.data.flatten()[1].item() > 0)
 
     # === Group 3: Non-existent file ===
     print("\nGroup 3: Non-existent file")
@@ -170,7 +170,7 @@ if __name__ == "__main__":
 
         run_test("nonexistent file: forwarded", output.ft_forwarded is True)
         run_test("nonexistent file: status < 0 (failed)",
-                 output.ft_static_tensor.data.flatten()[0].item() < 0)
+                 output.ft_initial_static_tensor.data.flatten()[0].item() < 0)
 
     # === Group 4: Autograd connectivity ===
     print("\nGroup 4: Autograd connectivity")

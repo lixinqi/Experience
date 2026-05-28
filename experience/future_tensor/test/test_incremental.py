@@ -5,7 +5,7 @@ ft_incremental_concated_tensors grows the logical view tensor dynamically.
 Instead of pre-allocating [1, max_iters], declare the iter dim as symbolic,
 start at size 0, and append one chunk per iteration.
 
-Logical view = concat(ft_static_tensor, *ft_incremental_concated_tensors)
+Logical view = concat(ft_initial_static_tensor, *ft_incremental_concated_tensors)
 """
 
 import os
@@ -66,8 +66,8 @@ with tempfile.TemporaryDirectory() as tmpdir:
              ft.ft_shape_schema == [sympy.Integer(1), n])
     run_test("3: ft_incremental_concated_tensors starts empty",
              ft.ft_incremental_concated_tensors == [])
-    run_test("4: ft_static_tensor shape matches capacity",
-             list(ft.ft_static_tensor.shape) == [1, 0])
+    run_test("4: ft_initial_static_tensor shape matches capacity",
+             list(ft.ft_initial_static_tensor.shape) == [1, 0])
 
 with tempfile.TemporaryDirectory() as tmpdir:
     n = sympy.Symbol("n")
@@ -148,15 +148,16 @@ with tempfile.TemporaryDirectory() as tmpdir:
     run_test("11: chunk1 has 'iter0_data'",
              chunk_content == "iter0_data")
 
-    # ft_get_materialized_value currently only reads ft_static_tensor (size [1,0])
-    # so coords [0,0] will IndexError — documenting the gap
-    try:
-        coeff, path = ft.ft_get_materialized_value([0, 0])
-        run_test("12: ft_get_materialized_value fails on incremental (gap)",
-                 False)
-    except (IndexError, Exception):
-        run_test("12: ft_get_materialized_value fails on incremental (gap confirmed)",
-                 True)
+    # ft_get_materialized_value now resolves across ft_initial_static_tensor +
+    # ft_incremental_concated_tensors via _resolve_coords_to_tensor
+    coeff, path = ft.ft_get_materialized_value([0, 0])
+    run_test("12: ft_get_materialized_value resolves to chunk coeff",
+             abs(coeff - 1.0) < 0.01)
+    run_test("13: ft_get_materialized_value path exists",
+             os.path.isfile(path))
+    with open(path) as f:
+        run_test("14: ft_get_materialized_value content matches chunk",
+                 f.read() == "iter0_data")
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -180,18 +181,18 @@ with tempfile.TemporaryDirectory() as tmpdir:
     import asyncio
 
     result0 = asyncio.run(ft.ft_async_get([0, 0], "prompt"))
-    run_test("13: ft_async_get [0,0] works",
+    run_test("15: ft_async_get [0,0] works",
              result0[0] == "iter_0")
 
     result5 = asyncio.run(ft.ft_async_get([0, 5], "prompt"))
-    run_test("14: ft_async_get [0,5] works (beyond any declared size)",
+    run_test("16: ft_async_get [0,5] works (beyond any declared size)",
              result5[0] == "iter_5")
 
     result99 = asyncio.run(ft.ft_async_get([0, 99], "prompt"))
-    run_test("15: ft_async_get [0,99] works",
+    run_test("17: ft_async_get [0,99] works",
              result99[0] == "iter_99")
 
-    run_test("16: all 3 calls logged",
+    run_test("18: all 3 calls logged",
              call_log == [[0, 0], [0, 5], [0, 99]])
 
 
@@ -221,12 +222,12 @@ with tempfile.TemporaryDirectory() as tmpdir:
     prompt_t = st_make_tensor(["start"], tmpdir)
     output.ft_forward(prompt_t)
 
-    content = read_element(output.ft_static_tensor, 0)
-    run_test("17: recurrent finds 'good3' at i=3",
+    content = read_element(output.ft_initial_static_tensor, 0)
+    run_test("19: recurrent finds 'good3' at i=3",
              content == "good3")
-    run_test("18: output forwarded",
+    run_test("20: output forwarded",
              output.ft_forwarded is True)
-    run_test("19: next_position advanced to recurrent_dim",
+    run_test("21: next_position advanced to recurrent_dim",
              next_pos.flatten()[0].item() == 5)
 
 
@@ -255,29 +256,29 @@ with tempfile.TemporaryDirectory() as tmpdir:
 
     # Step 1: processes i=0 only
     output.ft_forward(prompt_t)
-    run_test("20: after step 1, next_pos=1",
+    run_test("22: after step 1, next_pos=1",
              next_pos.flatten()[0].item() == 1)
-    run_test("21: not yet forwarded (not terminal)",
+    run_test("23: not yet forwarded (not terminal)",
              output.ft_forwarded is False)
 
     # Step 2: processes i=1 only
     output.ft_forward(prompt_t)
-    run_test("22: after step 2, next_pos=2",
+    run_test("24: after step 2, next_pos=2",
              next_pos.flatten()[0].item() == 2)
-    run_test("23: still not forwarded",
+    run_test("25: still not forwarded",
              output.ft_forwarded is False)
 
     # Step 3: processes i=2, finds confidence → done
     output.ft_forward(prompt_t)
-    run_test("24: after step 3, next_pos=3 (end_i on confidence)",
+    run_test("26: after step 3, next_pos=3 (end_i on confidence)",
              next_pos.flatten()[0].item() == 3)
-    run_test("25: now forwarded",
+    run_test("27: now forwarded",
              output.ft_forwarded is True)
 
-    content = read_element(output.ft_static_tensor, 0)
-    run_test("26: content is 'found_it'",
+    content = read_element(output.ft_initial_static_tensor, 0)
+    run_test("28: content is 'found_it'",
              content == "found_it")
-    run_test("27: exactly 3 calls to body",
+    run_test("29: exactly 3 calls to body",
              call_count[0] == 3)
 
 
@@ -294,20 +295,20 @@ with tempfile.TemporaryDirectory() as tmpdir:
     instance_ft = FutureTensor(tmpdir, None, [sympy.Integer(1)])
     instance_st = st_make_tensor(["my_instance"], tmpdir)
     from experience.symbolic_tensor.tensor_util.assign_tensor import assign_tensor
-    assign_tensor(instance_ft.ft_static_tensor, instance_st)
+    assign_tensor(instance_ft.ft_initial_static_tensor, instance_st)
     instance_ft.ft_forwarded = True
 
     # Expand to [1, 3] — coord [0, i] maps to [0]
     expanded = expand_forward(instance_ft, [1, 3])
-    run_test("28: expanded shape [1, 3]",
+    run_test("30: expanded shape [1, 3]",
              expanded.ft_capacity_shape == [1, 3])
-    run_test("29: expanded forwarded (input was forwarded)",
+    run_test("31: expanded forwarded (input was forwarded)",
              expanded.ft_forwarded is True)
 
     # All [0, i] should have same content as [0]
     for i in range(3):
-        content = read_element(expanded.ft_static_tensor, i)
-        run_test(f"30.{i}: expanded[0,{i}] = 'my_instance'",
+        content = read_element(expanded.ft_initial_static_tensor, i)
+        run_test(f"32.{i}: expanded[0,{i}] = 'my_instance'",
                  content == "my_instance")
 
 
@@ -343,10 +344,10 @@ with tempfile.TemporaryDirectory() as tmpdir:
     prompt_t = st_make_tensor(["task"], tmpdir)
     output.ft_forward(prompt_t)
 
-    content = read_element(output.ft_static_tensor, 0)
-    run_test("31: full pattern finds result at i=2",
+    content = read_element(output.ft_initial_static_tensor, 0)
+    run_test("33: full pattern finds result at i=2",
              content == "done_instance_A")
-    run_test("32: output forwarded",
+    run_test("34: output forwarded",
              output.ft_forwarded is True)
 
 
@@ -384,10 +385,10 @@ with tempfile.TemporaryDirectory() as tmpdir:
     prompt_t = st_make_tensor(["task"], tmpdir)
     output.ft_forward(prompt_t)
 
-    content = read_element(output.ft_static_tensor, 0)
-    run_test("33: validator finds 'hello world' at i=2",
+    content = read_element(output.ft_initial_static_tensor, 0)
+    run_test("35: validator finds 'hello world' at i=2",
              content == "hello world")
-    run_test("34: terminal state reached",
+    run_test("36: terminal state reached",
              terminal_state["found"] is True)
 
 
@@ -425,8 +426,8 @@ with tempfile.TemporaryDirectory() as tmpdir:
     prompt_t = st_make_tensor(["go"], tmpdir)
     output.ft_forward(prompt_t)
 
-    content = read_element(output.ft_static_tensor, 0)
-    run_test("35: body with shape [1] works in recurrent (finds at i=3)",
+    content = read_element(output.ft_initial_static_tensor, 0)
+    run_test("37: body with shape [1] works in recurrent (finds at i=3)",
              content == "success")
 
 

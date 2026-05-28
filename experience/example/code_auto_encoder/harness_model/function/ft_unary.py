@@ -34,7 +34,7 @@ def ft_unary(
         return fn(coords, prompt, output, status)
 
     return FutureTensor(
-        input_ft.ft_static_tensor.st_relative_to,
+        input_ft.ft_initial_static_tensor.st_relative_to,
         wrapped,
         [sympy.Integer(s) for s in input_ft.ft_capacity_shape],
     )

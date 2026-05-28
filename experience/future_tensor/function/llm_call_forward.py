@@ -43,17 +43,17 @@ def llm_call_forward(
     """
     input_shape = prompt_ft.ft_capacity_shape
     input_schema = prompt_ft.ft_shape_schema
-    relative_to = prompt_ft.ft_static_tensor.st_relative_to
+    relative_to = prompt_ft.ft_initial_static_tensor.st_relative_to
 
     async def _async_get(
         coordinates: List[int], trajactory: str,
     ) -> Tuple[str, Status]:
         # If already computed, read from disk
-        if output.ft_static_tensor.data[tuple(coordinates)].item() > 0:
+        if output.ft_initial_static_tensor.data[tuple(coordinates)].item() > 0:
             flat_idx = sum(
-                c * s for c, s in zip(coordinates, output.ft_static_tensor.stride())
+                c * s for c, s in zip(coordinates, output.ft_initial_static_tensor.stride())
             )
-            content = _read_file_content(output.ft_static_tensor, flat_idx)
+            content = _read_file_content(output.ft_initial_static_tensor, flat_idx)
             if content is not None:
                 return (content, Status.confidence(1.0))
 
@@ -65,22 +65,22 @@ def llm_call_forward(
         # Ensure upstream prompt is materialized
         if (
             not prompt_ft.ft_forwarded
-            and prompt_ft.ft_static_tensor.data[tuple(coordinates)].item() == 0
+            and prompt_ft.ft_initial_static_tensor.data[tuple(coordinates)].item() == 0
         ):
             prompt_text, prompt_status = await prompt_ft.ft_async_get(
                 coordinates, actual_trajactory,
             )
             if prompt_text:
                 st_setitem(
-                    prompt_ft.ft_static_tensor, coordinates, prompt_text,
+                    prompt_ft.ft_initial_static_tensor, coordinates, prompt_text,
                     coefficient=Status.convert_status_to_float(prompt_status),
                 )
         else:
             flat_idx = sum(
                 c * s
-                for c, s in zip(coordinates, prompt_ft.ft_static_tensor.stride())
+                for c, s in zip(coordinates, prompt_ft.ft_initial_static_tensor.stride())
             )
-            prompt_text = _read_file_content(prompt_ft.ft_static_tensor, flat_idx)
+            prompt_text = _read_file_content(prompt_ft.ft_initial_static_tensor, flat_idx)
             prompt_status = Status.confidence(1.0)
 
         if not prompt_text:
@@ -123,7 +123,7 @@ def llm_call_forward(
 
         # Write-through
         st_setitem(
-            output.ft_static_tensor, coordinates, result_content,
+            output.ft_initial_static_tensor, coordinates, result_content,
             coefficient=1.0,
         )
 

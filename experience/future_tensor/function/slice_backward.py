@@ -67,7 +67,7 @@ def slice_backward(
             return ("", Status.confidence(0.0))  # Zero/empty for positions not in the slice
         return await grad_output.ft_async_get(out_coords, trajactory)
 
-    result = FutureTensor(grad_output.ft_static_tensor.st_relative_to, scatter_async_get, [sympy.Integer(s) for s in original_shape])
+    result = FutureTensor(grad_output.ft_initial_static_tensor.st_relative_to, scatter_async_get, [sympy.Integer(s) for s in original_shape])
 
     # If grad_output is forwarded, materialize immediately
     if grad_output.ft_forwarded:
@@ -105,7 +105,7 @@ def _scatter_storage(grad_output, result, original_shape, per_dim):
             os.makedirs(os.path.dirname(dst_path), exist_ok=True)
             shutil.copy2(src_path, dst_path)
             # Copy coefficient (confidence) from grad_output
-            result.ft_static_tensor.data.flatten()[in_flat] = grad_output.ft_static_tensor.data.flatten()[out_flat]
+            result.ft_initial_static_tensor.data.flatten()[in_flat] = grad_output.ft_initial_static_tensor.data.flatten()[out_flat]
 
 
 def _coords_to_flat(coordinates: List[int], shape: List[int]) -> int:
@@ -120,7 +120,7 @@ def _coords_to_flat(coordinates: List[int], shape: List[int]) -> int:
 def _storage_path(ft: FutureTensor, flat_index: int) -> str:
     digits = list(str(flat_index))
     return os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", os.path.join(*digits), "data",
     )
 
@@ -164,7 +164,7 @@ if __name__ == "__main__":
         ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
         nested = _unflatten_data(data_list, shape)
         result_tensor = st_make_tensor(nested, tmpdir)
-        assign_tensor(ft.ft_static_tensor, result_tensor)
+        assign_tensor(ft.ft_initial_static_tensor, result_tensor)
         ft.ft_forwarded = True
         return ft
 
@@ -198,8 +198,8 @@ if __name__ == "__main__":
         run_test("1D scatter [9] empty", read_ft_element(r, 9) is None)
 
         # Coeff check
-        run_test("1D coeff [2] = 1", r.ft_static_tensor.data.flatten()[2].item() == 1.0)
-        run_test("1D coeff [0] = 0", r.ft_static_tensor.data.flatten()[0].item() == 0.0)
+        run_test("1D coeff [2] = 1", r.ft_initial_static_tensor.data.flatten()[2].item() == 1.0)
+        run_test("1D coeff [0] = 0", r.ft_initial_static_tensor.data.flatten()[0].item() == 0.0)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Step slice backward
@@ -213,7 +213,7 @@ if __name__ == "__main__":
         run_test("1D step [5] = s2", read_ft_element(r, 5) == "s2")
         run_test("1D step [7] = s3", read_ft_element(r, 7) == "s3")
         run_test("1D step [9] empty", read_ft_element(r, 9) is None)
-        run_test("1D step coeff [1]", r.ft_static_tensor.data.flatten()[1].item() == 1.0)
+        run_test("1D step coeff [1]", r.ft_initial_static_tensor.data.flatten()[1].item() == 1.0)
 
     # === Group 2: 2D scatter (tests 21-45) ===
 

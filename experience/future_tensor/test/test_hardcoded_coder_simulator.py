@@ -53,7 +53,7 @@ def run_test(name: str, condition: bool, expected=None, actual=None):
 def _storage_path(ft, flat_index):
     digits = list(str(flat_index))
     return os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", os.path.join(*digits), "data",
     )
 
@@ -122,7 +122,7 @@ with tempfile.TemporaryDirectory() as tmpdir:
 
     run_test("pipeline forwarded", pipeline.ft_forwarded is True)
     run_test("pipeline status = confidence",
-             pipeline.ft_static_tensor.data.flatten()[0].item() > 0)
+             pipeline.ft_initial_static_tensor.data.flatten()[0].item() > 0)
 
     final_content = read_ft_element(pipeline, 0)
     run_test("final capture not None", final_content is not None)

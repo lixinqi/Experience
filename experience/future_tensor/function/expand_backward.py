@@ -75,7 +75,7 @@ def expand_backward(
         return await grad_output.ft_async_get(out_coords, trajactory)
 
     result = FutureTensor(
-        grad_output.ft_static_tensor.st_relative_to,
+        grad_output.ft_initial_static_tensor.st_relative_to,
         reduced_async_get,
         [sympy.Integer(s) for s in input_shape],
     )
@@ -120,7 +120,7 @@ def _reduce_storage(grad_output, result, input_shape, expanded_shape, ndim_diff)
             coeff_sum = _sum_coefficients(
                 grad_output, in_coords, input_shape, expanded_shape, ndim_diff
             )
-            result.ft_static_tensor.data.flatten()[in_flat] = coeff_sum
+            result.ft_initial_static_tensor.data.flatten()[in_flat] = coeff_sum
 
 
 def _sum_coefficients(grad_output, in_coords, input_shape, expanded_shape, ndim_diff):
@@ -140,7 +140,7 @@ def _sum_coefficients(grad_output, in_coords, input_shape, expanded_shape, ndim_
     total = 0.0
     for out_coords in itertools.product(*ranges):
         out_flat = _coords_to_flat(list(out_coords), expanded_shape)
-        total += grad_output.ft_static_tensor.data.flatten()[out_flat].item()
+        total += grad_output.ft_initial_static_tensor.data.flatten()[out_flat].item()
     return total
 
 
@@ -156,7 +156,7 @@ def _coords_to_flat(coordinates: List[int], shape: List[int]) -> int:
 def _storage_path(ft: FutureTensor, flat_index: int) -> str:
     digits = list(str(flat_index))
     return os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", os.path.join(*digits), "data",
     )
 
@@ -195,10 +195,10 @@ if __name__ == "__main__":
         ft = FutureTensor(tmpdir, dummy_get, [sympy.Integer(s) for s in shape])
         nested = _unflatten_data(data_list, shape)
         result_tensor = st_make_tensor(nested, tmpdir)
-        assign_tensor(ft.ft_static_tensor, result_tensor)
+        assign_tensor(ft.ft_initial_static_tensor, result_tensor)
         if coeffs is not None:
             for i, c in enumerate(coeffs):
-                ft.ft_static_tensor.data.flatten()[i] = c
+                ft.ft_initial_static_tensor.data.flatten()[i] = c
         ft.ft_forwarded = True
         return ft
 
@@ -234,7 +234,7 @@ if __name__ == "__main__":
         run_test("[0,1] content = g01", read_ft_element(r, 1) == "g01")
         # Coefficient should be sum over dim 0: 4 * 1.0 = 4.0
         run_test("[0,0] coeff = 4.0",
-                 abs(r.ft_static_tensor.data.flatten()[0].item() - 4.0) < 0.1)
+                 abs(r.ft_initial_static_tensor.data.flatten()[0].item() - 4.0) < 0.1)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         # Expanded [3,1] -> [3,5], backward should reduce dim 1
@@ -250,7 +250,7 @@ if __name__ == "__main__":
         run_test("[2,0] content = g20", read_ft_element(r, 2) == "g20")
         # Coefficient should be sum over dim 1: 5 * 0.5 = 2.5
         run_test("[0,0] coeff = 2.5",
-                 abs(r.ft_static_tensor.data.flatten()[0].item() - 2.5) < 0.1)
+                 abs(r.ft_initial_static_tensor.data.flatten()[0].item() - 2.5) < 0.1)
 
     # === Group 2: Prepended dim reduce ===
     print("\nGroup 2: Prepended dim reduce")
@@ -269,7 +269,7 @@ if __name__ == "__main__":
         run_test("[2] content = g02", read_ft_element(r, 2) == "g02")
         # Coeff: sum over prepended dim: 2 * 1.0 = 2.0
         run_test("[0] coeff = 2.0",
-                 abs(r.ft_static_tensor.data.flatten()[0].item() - 2.0) < 0.1)
+                 abs(r.ft_initial_static_tensor.data.flatten()[0].item() - 2.0) < 0.1)
 
     # === Group 3: No-op (same shape) ===
     print("\nGroup 3: No-op reduce")
@@ -280,7 +280,7 @@ if __name__ == "__main__":
         run_test("noop shape [2,3]", r.ft_capacity_shape == [2, 3])
         run_test("noop [0] = g0", read_ft_element(r, 0) == "g0")
         run_test("noop coeff [0] = 1.0",
-                 abs(r.ft_static_tensor.data.flatten()[0].item() - 1.0) < 0.1)
+                 abs(r.ft_initial_static_tensor.data.flatten()[0].item() - 1.0) < 0.1)
 
     # === Group 4: Lazy reduce ===
     print("\nGroup 4: Lazy reduce")

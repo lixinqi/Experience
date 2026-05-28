@@ -28,7 +28,7 @@ def ft_ps1_shows_up(ps1_pattern_ft: FutureTensor, capture_ft: FutureTensor) -> F
         is "true" if the PS1 regexp matches in the capture text, "false" otherwise.
     """
     shape = capture_ft.ft_capacity_shape
-    relative_to = capture_ft.ft_static_tensor.st_relative_to
+    relative_to = capture_ft.ft_initial_static_tensor.st_relative_to
 
     async def ps1_check_get(coordinates: List[int], trajactory: str):
         # Read capture text

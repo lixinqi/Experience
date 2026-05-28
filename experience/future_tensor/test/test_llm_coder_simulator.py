@@ -120,7 +120,7 @@ def ft_coder_validator(
     max_iters: int = 30,
 ) -> FutureTensor:
     """Validator: run iteration body, check if terminal shows command completion."""
-    relative_to = iteration_body.ft_static_tensor.st_relative_to
+    relative_to = iteration_body.ft_initial_static_tensor.st_relative_to
 
     async def _validator_async_get(coords, trajactory):
         i = coords[-1]
@@ -142,7 +142,7 @@ def ft_coder_validator(
 def read_ft_element(ft, flat_index):
     digits = list(str(flat_index))
     path = os.path.join(
-        ft.ft_static_tensor.st_relative_to, ft.ft_static_tensor.st_tensor_uid,
+        ft.ft_initial_static_tensor.st_relative_to, ft.ft_initial_static_tensor.st_tensor_uid,
         "storage", os.path.join(*digits), "data",
     )
     if not os.path.isfile(path):

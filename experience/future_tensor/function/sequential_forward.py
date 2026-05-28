@@ -52,7 +52,7 @@ def sequential_forward(
         return last_result
 
     result = FutureTensor(
-        inputs[0].ft_static_tensor.st_relative_to,
+        inputs[0].ft_initial_static_tensor.st_relative_to,
         sequential_async_get,
         inputs[0].ft_shape_schema,
     )

@@ -6,7 +6,7 @@ import torch
 
 
 _FUTURE_TENSOR_ATTRS = [
-    "ft_static_tensor",
+    "ft_initial_static_tensor",
     "ft_incremental_concated_tensors",
     "ft_shape_schema",
     "ft_capacity_shape",

@@ -111,14 +111,14 @@ class FtLegacyExpert(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, grad_output: torch.Tensor):
-        # After forward + ft_forward, FutureTensors have materialized .ft_static_tensor
+        # After forward + ft_forward, FutureTensors have materialized .ft_initial_static_tensor
         # New mapping:
-        #   st_moe.input   = input.ft_static_tensor (requires_grad based on coefficients)
-        #   st_moe.context = prompt_tensor.ft_static_tensor (requires_grad=False)
+        #   st_moe.input   = input.ft_initial_static_tensor (requires_grad based on coefficients)
+        #   st_moe.context = prompt_tensor.ft_initial_static_tensor (requires_grad=False)
         #   st_moe.experience = experience (direct)
 
-        output_st = ctx.output_ft.ft_static_tensor
-        prompt_tensor_st = ctx.prompt_tensor_ft.ft_static_tensor  # = st_moe.context
+        output_st = ctx.output_ft.ft_initial_static_tensor
+        prompt_tensor_st = ctx.prompt_tensor_ft.ft_initial_static_tensor  # = st_moe.context
         prompt_tensor_st.requires_grad_(False)
 
         # Restore experience st_* attrs
@@ -128,7 +128,7 @@ class FtLegacyExpert(torch.autograd.Function):
 
         # Build input_st (= st_moe.input)
         # input is always a FutureTensor (may be "none tensor" with zero coefficients)
-        input_st = ctx.input_ft.ft_static_tensor
+        input_st = ctx.input_ft.ft_initial_static_tensor
         # Check if any coefficient > 0 to decide requires_grad
         has_content = input_st.data.sum().item() > 0
         if has_content:
@@ -351,7 +351,7 @@ if __name__ == "__main__":
         output.ft_forward(output_prompts)
 
         run_test("output forwarded", output.ft_forwarded is True)
-        content_0 = read_storage(output.ft_static_tensor, 0)
+        content_0 = read_storage(output.ft_initial_static_tensor, 0)
         run_test("output[0] has content",
                  content_0 is not None,
                  "not None", content_0)
@@ -359,7 +359,7 @@ if __name__ == "__main__":
                  content_0 is not None and content_0.strip() != "TODO",
                  "not TODO", content_0)
         run_test("output coeff > 0",
-                 output.ft_static_tensor.data[0].item() > 0)
+                 output.ft_initial_static_tensor.data[0].item() > 0)
 
     # ── Tests 12-14: ctx saves backward args ──
     print("Tests 12-14: ctx saves backward args")
@@ -406,8 +406,8 @@ if __name__ == "__main__":
         output_prompts = make_tensor(["context_A", "context_B"], tmpdir)
         output.ft_forward(output_prompts)
 
-        pt0 = read_storage(prompt_tensor.ft_static_tensor, 0)
-        pt1 = read_storage(prompt_tensor.ft_static_tensor, 1)
+        pt0 = read_storage(prompt_tensor.ft_initial_static_tensor, 0)
+        pt1 = read_storage(prompt_tensor.ft_initial_static_tensor, 1)
         run_test("prompt_tensor[0] stored", pt0 is not None)
         run_test("prompt_tensor[1] stored", pt1 is not None)
         run_test("prompt_tensor has content",
