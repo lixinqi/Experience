@@ -240,7 +240,7 @@ class CodingAgentEngine:
             data = json.loads(output_file.read_text(encoding="utf-8"))
             return _parse_keystroke_node(data)
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            return KeystrokeNode(comments="Failed to parse agent output")
+            return KeystrokeNode()
 
 
 # Module-level engine_step factory for convenience
