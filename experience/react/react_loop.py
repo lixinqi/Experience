@@ -74,26 +74,6 @@ def _make_mail_op(task, capture_ft, tmpdir):
     return ft
 
 
-def _make_engine_op(capture_ft, fixation_ft, mail_ft, engine_step_fn, task, tmpdir):
-    """Create FutureTensor op wrapping engine_step → serialized KeystrokeNode tree.
-
-    Passes DAG tensors + real coordinates to engine per engine_step.viba contract.
-    """
-    shape = capture_ft.ft_capacity_shape
-    schema = capture_ft.ft_shape_schema
-
-    async def _engine_get(coords, trajectory):
-        output = await engine_step_fn(capture_ft, fixation_ft, mail_ft, coords, task)
-        if output.plan:
-            return (output.plan.serialize(), Status.confidence(1.0))
-        return ("", Status.self_confidence_but_failed(0.5))
-
-    engine_ft = FutureTensor(tmpdir, _engine_get, list(schema))
-    engine_ft.ft_capacity_shape = list(shape)
-    engine_ft.requires_grad_(True)
-    return engine_ft
-
-
 def _make_validator(body, validator_fn, tmpdir):
     """Create validator FutureTensor with symbolic iteration dim."""
     n = sympy.Symbol("n")
@@ -127,7 +107,7 @@ def _compose_dag(instance_ft, engine_step_fn, task, tmpdir, config):
     capture = ft_tmux_capture_pane(expanded)
     fixation = _make_fixation_op(capture, tmpdir)
     mail = _make_mail_op(task, capture, tmpdir)
-    engine_op = _make_engine_op(capture, fixation, mail, engine_step_fn, task, tmpdir)
+    engine_op = engine_step_fn(capture, fixation, mail, task)
     cmd_spec = ft_speculative_keystroke(engine_op, capture)
     send_keys = ft_tmux_send_keys(cmd_spec, expanded)
     post_capture = ft_sequential(

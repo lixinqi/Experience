@@ -67,9 +67,13 @@ class ReactConfig:
 #   <- $mail FutureTensor
 #   <- $coordinates list[int]
 #   <- $task str
+#
+# CodingAgentEngine.__call__ returns a FutureTensor (future op):
+#   FutureTensor[Awaitable[$output EngineOutput] <- $coordinates <- $prompt]
+#   <- $task * $mail * $fixation * $capture
 EngineStepFn = Callable[
-    [FutureTensor, FutureTensor, FutureTensor, List[int], str],
-    Awaitable[EngineOutput],
+    [FutureTensor, FutureTensor, FutureTensor, str],
+    FutureTensor,
 ]
 
 ValidatorFn = Callable[[str, int], bool]

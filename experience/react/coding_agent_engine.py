@@ -4,9 +4,26 @@ CodingAgentEngine: General-purpose engine functor for coding agents.
 Wraps any interactive coding agent (Claude Code, OpenClaw, OpenCode, Ducc, Hermes)
 running in an "inner tmux" (the brain). Communicates via file-based IPC.
 
-Signature (per engine_step.viba):
-    engine_step($capture FutureTensor, $fixation FutureTensor, $mail FutureTensor,
-                $coordinates list[int], $task str) -> EngineOutput
+__call__ returns a FutureTensor — a lazy op that, when evaluated at coordinates,
+triggers the inner agent step and yields EngineOutput.
+
+ADT:
+    CodingAgentEngine :=
+        FutureTensor[
+          Awaitable[$output EngineOutput]
+            <- $coordinates list[int]
+            <- $prompt str
+        ]
+        # __call__
+        <- $task str
+        <- $mail FutureTensor
+        <- $fixation FutureTensor
+        <- $capture FutureTensor
+        # __init__
+        <- ($launch_cmd str | void)
+        <- $work_dir str
+        <- $inner_session_id str
+        <- $agent_type str
 """
 
 import json
@@ -19,6 +36,7 @@ import libtmux
 
 from experience.future_tensor.function.tmux_session import tmux_session_prefix
 from experience.future_tensor.future_tensor import FutureTensor
+from experience.future_tensor.status import Status
 from experience.react.fixation import extract_foveal
 from experience.react.react_types import EngineOutput, KeystrokeNode
 
@@ -79,18 +97,29 @@ class CodingAgentEngine:
         self.step_counter = 0
         self.work_dir.mkdir(parents=True, exist_ok=True)
 
-    async def __call__(self, capture: FutureTensor, fixation: FutureTensor,
-                       mail: FutureTensor, coordinates: List[int],
-                       task: str) -> EngineOutput:
+    def __call__(self, capture: FutureTensor, fixation: FutureTensor,
+                 mail: FutureTensor, task: str) -> FutureTensor:
         self._ensure_launched()
-        capture_text = await _read_ft(capture, coordinates)
-        fixation_text = await _read_ft(fixation, coordinates)
-        step_n = self.step_counter
-        self.step_counter += 1
-        self._write_step_input(capture_text, fixation_text, task, step_n)
-        self._send_step_command(step_n)
-        self._wait_for_signal(step_n, timeout=120)
-        return self._read_step_output(step_n)
+        shape = list(capture.ft_capacity_shape)
+        schema = list(capture.ft_shape_schema)
+
+        async def _engine_get(coordinates, trajectory):
+            capture_text = await _read_ft(capture, coordinates)
+            fixation_text = await _read_ft(fixation, coordinates)
+            step_n = self.step_counter
+            self.step_counter += 1
+            self._write_step_input(capture_text, fixation_text, task, step_n)
+            self._send_step_command(step_n)
+            self._wait_for_signal(step_n, timeout=120)
+            output = self._read_step_output(step_n)
+            if output.plan:
+                return (output.plan.serialize(), Status.confidence(1.0))
+            return ("", Status.self_confidence_but_failed(0.5))
+
+        ft = FutureTensor(str(self.work_dir), _engine_get, schema)
+        ft.ft_capacity_shape = shape
+        ft.requires_grad_(True)
+        return ft
 
     def _get_inner_pane(self):
         """Get the active pane of the inner agent tmux session."""

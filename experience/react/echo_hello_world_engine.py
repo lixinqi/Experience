@@ -3,15 +3,25 @@ EchoHelloWorldEngine: simplest possible engine implementing engine_step contract
 
 Hardcodes the plan: type "echo hello world" + Enter. No LLM, no experience.
 
-Signature (per engine_step.viba):
-    engine_step($capture FutureTensor, $fixation FutureTensor, $mail FutureTensor,
-                $coordinates list[int], $task str) -> EngineOutput
+ADT:
+    EchoHelloWorldEngine :=
+        FutureTensor[
+          Awaitable[$output EngineOutput]
+            <- $coordinates list[int]
+            <- $prompt str
+        ]
+        <- $task str
+        <- $mail FutureTensor
+        <- $fixation FutureTensor
+        <- $capture FutureTensor
 """
 
+import tempfile
 from typing import List, Tuple
 
 from experience.future_tensor.future_tensor import FutureTensor
-from experience.react.react_types import KeystrokeNode, EngineOutput, ft_read
+from experience.future_tensor.status import Status
+from experience.react.react_types import KeystrokeNode, EngineOutput
 from experience.react.fixation import extract_foveal
 
 
@@ -25,7 +35,7 @@ def _parse_fixation(fixation_text: str) -> Tuple[int, int]:
 
 
 def _build_plan(fixation: Tuple[int, int], foveal: str) -> KeystrokeNode:
-    """Build hardcoded KeystrokeNode chain: T echo hello world → C Enter."""
+    """Build hardcoded KeystrokeNode chain: T echo hello world -> C Enter."""
     row, col = fixation
     text = "echo hello world"
     node_type = KeystrokeNode(
@@ -59,16 +69,24 @@ async def _read_ft(ft: FutureTensor, coordinates: List[int]) -> str:
     return text
 
 
-async def engine_step(
+def engine_step(
     capture: FutureTensor,
     fixation: FutureTensor,
     mail: FutureTensor,
-    coordinates: List[int],
     task: str,
-) -> EngineOutput:
-    """Engine step per engine_step.viba contract."""
-    capture_text = await _read_ft(capture, coordinates)
-    fixation_text = await _read_ft(fixation, coordinates)
-    fix_point = _parse_fixation(fixation_text)
-    foveal = extract_foveal(capture_text, fix_point)
-    return EngineOutput(plan=_build_plan(fix_point, foveal))
+) -> FutureTensor:
+    shape = list(capture.ft_capacity_shape)
+    schema = list(capture.ft_shape_schema)
+
+    async def _engine_get(coordinates, trajectory):
+        capture_text = await _read_ft(capture, coordinates)
+        fixation_text = await _read_ft(fixation, coordinates)
+        fix_point = _parse_fixation(fixation_text)
+        foveal = extract_foveal(capture_text, fix_point)
+        output = EngineOutput(plan=_build_plan(fix_point, foveal))
+        return (output.plan.serialize(), Status.confidence(1.0))
+
+    ft = FutureTensor(tempfile.mkdtemp(prefix="echo_engine_"), _engine_get, schema)
+    ft.ft_capacity_shape = shape
+    ft.requires_grad_(True)
+    return ft
