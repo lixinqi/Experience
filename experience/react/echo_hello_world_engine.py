@@ -6,7 +6,7 @@ Hardcodes the plan: type "echo hello world" + Enter. No LLM, no experience.
 ADT:
     EchoHelloWorldEngine :=
         FutureTensor[
-          Awaitable[$output EngineOutput]
+          Awaitable[$output KeystrokeNode]
             <- $coordinates list[int]
             <- $prompt str
         ]
@@ -21,7 +21,7 @@ from typing import List, Tuple
 
 from experience.future_tensor.future_tensor import FutureTensor
 from experience.future_tensor.status import Status
-from experience.react.react_types import KeystrokeNode, EngineOutput
+from experience.react.react_types import KeystrokeNode
 from experience.react.fixation import extract_foveal
 
 
@@ -83,8 +83,8 @@ def engine_step(
         fixation_text = await _read_ft(fixation, coordinates)
         fix_point = _parse_fixation(fixation_text)
         foveal = extract_foveal(capture_text, fix_point)
-        output = EngineOutput(plan=_build_plan(fix_point, foveal))
-        return (output.plan.serialize(), Status.confidence(1.0))
+        plan = _build_plan(fix_point, foveal)
+        return (plan.serialize(), Status.confidence(1.0))
 
     ft = FutureTensor(tempfile.mkdtemp(prefix="echo_engine_"), _engine_get, schema)
     ft.ft_capacity_shape = shape

@@ -5,12 +5,12 @@ Wraps any interactive coding agent (Claude Code, OpenClaw, OpenCode, Ducc, Herme
 running in an "inner tmux" (the brain). Communicates via file-based IPC.
 
 __call__ returns a FutureTensor — a lazy op that, when evaluated at coordinates,
-triggers the inner agent step and yields EngineOutput.
+triggers the inner agent step and yields KeystrokeNode.
 
 ADT:
     CodingAgentEngine :=
         FutureTensor[
-          Awaitable[$output EngineOutput]
+          Awaitable[$output KeystrokeNode]
             <- $coordinates list[int]
             <- $prompt str
         ]
@@ -38,7 +38,7 @@ from experience.future_tensor.function.tmux_session import tmux_session_prefix
 from experience.future_tensor.future_tensor import FutureTensor
 from experience.future_tensor.status import Status
 from experience.react.fixation import extract_foveal
-from experience.react.react_types import EngineOutput, KeystrokeNode
+from experience.react.react_types import KeystrokeNode
 
 
 LAUNCH_COMMANDS = {
@@ -111,10 +111,10 @@ class CodingAgentEngine:
             self._write_step_input(capture_text, fixation_text, task, step_n)
             self._send_step_command(step_n)
             self._wait_for_signal(step_n, timeout=120)
-            output = self._read_step_output(step_n)
-            if output.plan:
-                return (output.plan.serialize(), Status.confidence(1.0))
-            return ("", Status.self_confidence_but_failed(0.5))
+            node = self._read_step_output(step_n)
+            if node.keystrokes:
+                return (node.serialize(), Status.confidence(1.0))
+            return (node.serialize(), Status.self_confidence_but_failed(0.5))
 
         ft = FutureTensor(str(self.work_dir), _engine_get, schema)
         ft.ft_capacity_shape = shape
@@ -234,14 +234,13 @@ class CodingAgentEngine:
             time.sleep(0.5)
         raise TimeoutError(f"Step {step_n} signal not received within {timeout}s")
 
-    def _read_step_output(self, step_n: int) -> EngineOutput:
+    def _read_step_output(self, step_n: int) -> KeystrokeNode:
         output_file = self.work_dir / f"step_{step_n}_output.json"
         try:
             data = json.loads(output_file.read_text(encoding="utf-8"))
-            node = _parse_keystroke_node(data)
-            return EngineOutput(plan=node)
+            return _parse_keystroke_node(data)
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
-            return EngineOutput(mail="Failed to parse agent output")
+            return KeystrokeNode(comments="Failed to parse agent output")
 
 
 # Module-level engine_step factory for convenience

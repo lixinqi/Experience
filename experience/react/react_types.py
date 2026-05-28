@@ -10,19 +10,20 @@ from experience.future_tensor.future_tensor import FutureTensor
 @dataclass
 class KeystrokeNode:
     """Recursive tree of keystrokes with predicted fixation points."""
-    current_fixation: Tuple[int, int]
-    current_foveal: str
-    keystrokes: str
-    predicted_next_fixation: Tuple[int, int]
-    predicted_next_foveal: str
+    current_fixation: Tuple[int, int] = (0, 0)
+    current_foveal: str = ""
+    keystrokes: str = ""
+    predicted_next_fixation: Tuple[int, int] = (0, 0)
+    predicted_next_foveal: str = ""
     children: List["KeystrokeNode"] = field(default_factory=list)
+    comments: str = ""
 
     def serialize(self) -> str:
         """Serialize this KeystrokeNode tree to JSON string."""
         def _to_dict(n):
             if n is None:
                 return None
-            return {
+            d = {
                 "current_fixation": list(n.current_fixation),
                 "current_foveal": n.current_foveal,
                 "keystrokes": n.keystrokes,
@@ -30,6 +31,9 @@ class KeystrokeNode:
                 "predicted_next_foveal": n.predicted_next_foveal,
                 "children": [_to_dict(c) for c in n.children],
             }
+            if n.comments:
+                d["comments"] = n.comments
+            return d
         return json.dumps(_to_dict(self))
 
     @staticmethod
@@ -44,13 +48,6 @@ class KeystrokeNode:
 
 
 @dataclass
-class EngineOutput:
-    """Sum type: either a plan (KeystrokeNode tree) or a mail message."""
-    plan: Optional[KeystrokeNode] = None
-    mail: Optional[str] = None
-
-
-@dataclass
 class ReactConfig:
     """Configuration for the ReAct loop."""
     max_iterations: int = 20
@@ -61,7 +58,7 @@ class ReactConfig:
 
 
 # engine_step signature per engine_step.viba:
-#   $output EngineOutput
+#   $output KeystrokeNode
 #   <- $capture FutureTensor
 #   <- $fixation FutureTensor
 #   <- $mail FutureTensor
@@ -69,7 +66,7 @@ class ReactConfig:
 #   <- $task str
 #
 # CodingAgentEngine.__call__ returns a FutureTensor (future op):
-#   FutureTensor[Awaitable[$output EngineOutput] <- $coordinates <- $prompt]
+#   FutureTensor[Awaitable[$output KeystrokeNode] <- $coordinates <- $prompt]
 #   <- $task * $mail * $fixation * $capture
 EngineStepFn = Callable[
     [FutureTensor, FutureTensor, FutureTensor, str],

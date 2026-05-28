@@ -6,14 +6,10 @@ KeystrokeNode :=
  * $predicted_next_fixation (int * int)
  * $predicted_next_foveal str
  * $children list[KeystrokeNode]
-
-EngineOutput :=
-   Oneof
- | $plan KeystrokeNode
- | $mail str
+ * $comments str
 
 engine_step :=
-   $output EngineOutput
+   $output KeystrokeNode
 <- $capture FutureTensor
 <- $fixation FutureTensor
 <- $mail FutureTensor
