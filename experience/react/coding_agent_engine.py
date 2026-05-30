@@ -108,9 +108,15 @@ class CodingAgentEngine:
             fixation_text = await _read_ft(fixation, coordinates)
             step_n = self.step_counter
             self.step_counter += 1
-            self._write_step_input(capture_text, fixation_text, task, step_n)
+            logical_views = {
+                "capture": capture.ft_describe_logical_view(),
+                "fixation": fixation.ft_describe_logical_view(),
+                "mail": mail.ft_describe_logical_view(),
+            }
+            self._write_step_input(capture_text, fixation_text, task,
+                                   logical_views, step_n)
             self._send_step_command(step_n)
-            self._wait_for_signal(step_n, timeout=120)
+            self._wait_for_signal(step_n, timeout=300)
             node = self._read_step_output(step_n)
             if node.keystrokes:
                 return (node.serialize(), Status.confidence(1.0))
@@ -148,17 +154,29 @@ class CodingAgentEngine:
             lines = pane.capture_pane()
             tail = "\n".join(lines[-5:]) if isinstance(lines, list) else str(lines)
             if "\u276f" in tail or ">" in tail:
+                break
+        # Verify readiness: send a minimal echo command and wait for output.
+        # This confirms the agent is past welcome screen and processing commands.
+        readiness_marker = "__ENGINE_READY__"
+        pane.send_keys(f"echo {readiness_marker}", enter=True)
+        deadline2 = time.time() + 30
+        while time.time() < deadline2:
+            time.sleep(1)
+            lines = pane.capture_pane()
+            full = "\n".join(lines) if isinstance(lines, list) else str(lines)
+            if readiness_marker in full and ("\u276f" in full or ">" in full):
                 return
         # Proceed anyway after timeout
 
     def _write_step_input(self, capture_text: str, fixation_text: str,
-                          task: str, step_n: int):
+                          task: str, logical_views: dict, step_n: int):
         input_file = self.work_dir / f"step_{step_n}_input.json"
         data = {
             "step": step_n,
             "task": task,
             "capture": capture_text,
             "fixation": fixation_text,
+            "logical_views": logical_views,
             "output_file": str(self.work_dir / f"step_{step_n}_output.json"),
             "signal_file": str(self.work_dir / f"step_{step_n}_done"),
         }
@@ -194,31 +212,46 @@ class CodingAgentEngine:
         prompt_schema = (
             '{\n'
             '  "current_fixation": [row, col],\n'
-            '  "current_foveal": "...",\n'
+            '  "current_foveal": "exact text at fixation from capture (3-10 chars)",\n'
             '  "keystrokes": "T <type text here>",\n'
             '  "predicted_next_fixation": [row, col],\n'
-            '  "predicted_next_foveal": "...",\n'
+            '  "predicted_next_foveal": "exact text expected after keystroke (3-10 chars)",\n'
             '  "children": [\n'
             '    {\n'
             '      "current_fixation": [row, col],\n'
-            '      "current_foveal": "...",\n'
+            '      "current_foveal": "exact text at fixation from capture (3-10 chars)",\n'
             '      "keystrokes": "C Enter",\n'
             '      "predicted_next_fixation": [row, col],\n'
-            '      "predicted_next_foveal": "...",\n'
+            '      "predicted_next_foveal": "exact text expected after keystroke (3-10 chars)",\n'
             '      "children": []\n'
             '    }\n'
             '  ]\n'
             '}'
         )
         prompt = (
-            f"Read {input_path} and execute the next step. "
-            f"Write a KeystrokeNode plan to the output_file. "
+            f"Read {input_path} and plan ALL keystrokes needed to complete "
+            f"the entire task. Produce a single KeystrokeNode tree covering "
+            f"every step — use children to sequence multi-step tasks.\n\n"
+            f"The JSON has a logical_views field: each key is a tensor name, "
+            f"the value is a list of segments with shape_before, shape_after, "
+            f"and symbolic_tensor_path. Walk the segments to see what previous "
+            f"iterations produced — the last segment has the latest data. "
+            f"Use this history to decide what to do next.\n\n"
+            f"Write the KeystrokeNode plan to the output_file. "
             f"Use exactly this JSON schema:\n{prompt_schema}\n\n"
             f"Keystroke format: T for type text, C for control key (C Enter, C c, etc). "
+            f"CRITICAL: current_foveal and predicted_next_foveal MUST be exact "
+            f"substrings visible in the terminal capture text (e.g. 'ience', 'R_ONE', "
+            f"'MARKER_ONE'), NOT descriptions. The system validates these against the "
+            f"actual screen. Use 3-10 character snippets from the capture.\n\n"
             f"Then touch the signal_file. "
             f"After touching the signal_file, do absolutely nothing else."
         )
         pane.send_keys(prompt, enter=True)
+        # Ducc captures multi-line text as a paste; a second Enter
+        # is needed to actually execute the pasted command.
+        time.sleep(0.5)
+        pane.enter()
 
     def _wait_for_signal(self, step_n: int, timeout: float):
         signal_file = self.work_dir / f"step_{step_n}_done"

@@ -234,8 +234,9 @@ def _ft_describe_logical_view_impl(ft) -> list:
     current_shape = list(static_shape)
     for chunk, axis in ft.ft_incremental_concated_tensors:
         shape_before = list(current_shape)
-        chunk_shape = list(chunk.shape)
-        current_shape[axis] += chunk_shape[axis]
+        # Chunk may have fewer dims than current_shape (e.g., [1] vs [1, 0]).
+        # The chunk always extends by 1 along the concat axis.
+        current_shape[axis] += 1
         segments.append({
             "shape_before": shape_before,
             "shape_after": list(current_shape),
