@@ -48,18 +48,18 @@ def _strip_think_tags(content: str) -> str:
     return content.strip()
 
 
-async def _call_with_retry(client: AsyncOpenAI, model: str, messages: list) -> str:
+async def _call_with_retry(client: AsyncOpenAI, model: str, messages: list, extra_body=None) -> str:
     """Call the LLM API with automatic retry on rate-limit, server, and bad-request errors."""
     rate_limit_attempts = 0
     server_error_attempts = 0
     bad_request_attempts = 0
     while True:
         try:
-            response = await client.chat.completions.create(
-                model=model,
-                messages=messages,
-                stream=False,
-            )
+            kwargs = dict(model=model, messages=messages, stream=False,
+                          temperature=0, top_p=1)
+            if extra_body is not None:
+                kwargs["extra_body"] = extra_body
+            response = await client.chat.completions.create(**kwargs)
             if isinstance(response, str):
                 return response
             return response.choices[0].message.content
@@ -90,15 +90,17 @@ async def _call_with_retry(client: AsyncOpenAI, model: str, messages: list) -> s
 async def raw_llm_query(
     prompt: str,
     config: Optional[RawLlmConfig] = None,
+    extra_body: Optional[dict] = None,
 ):
     """Query OpenAI-compatible LLM API with the given prompt.
-    
+
     This function is completely decoupled from configuration details.
-    
+
     Args:
         prompt: The prompt to send to the LLM.
         config: Optional RawLlmConfig. If None, creates default config from environment/~/.experience.json.
-    
+        extra_body: Optional dict passed as extra_body to the API call (e.g. {'thinking': {'type': 'disabled'}}).
+
     Returns:
         The LLM response text.
     """
@@ -140,7 +142,7 @@ async def raw_llm_query(
                 {"role": "system", "content": "You are a helpful assistant. Output raw content only, no thinking process."},
                 {"role": "user", "content": prompt},
             ]
-            content = await _call_with_retry(client, config.model, messages)
+            content = await _call_with_retry(client, config.model, messages, extra_body=extra_body)
             return _strip_think_tags(content)
         finally:
             await client.close()

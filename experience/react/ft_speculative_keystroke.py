@@ -67,29 +67,25 @@ def ft_speculative_keystroke(
             tree = KeystrokeNode.deserialize(text)
             if not tree:
                 return ("", Status.self_confidence_but_failed(0.5))
-            if not _foveal_ok(tree, screen, "current_fixation", "current_foveal"):
-                return ("", Status.self_confidence_but_failed(0.5))
+            foveal_pass = _foveal_ok(tree, screen, "current_fixation", "current_foveal")
             state[key] = {"node": tree}
-            return (tree["keystrokes"], Status.confidence(1.0))
+            confidence = 1.0 if foveal_pass else 0.5
+            return (tree["keystrokes"], Status.confidence(confidence))
 
-        # Advance: validate post-send prediction from last node
+        # Advance: validate post-send prediction from last node, then advance to child
         node = cur["node"]
-        if not _foveal_ok(node, screen, "predicted_next_fixation", "predicted_next_foveal"):
-            state.pop(key, None)
-            return ("", Status.self_confidence_but_failed(0.5))
+        pred_ok = _foveal_ok(node, screen, "predicted_next_fixation", "predicted_next_foveal")
 
-        # Advance to child
         children = node.get("children", [])
         if not children or not children[0]:
             state[key] = {"node": node, "done": True}
             return ("", Status.confidence(1.0))
 
         child = children[0]
-        if not _foveal_ok(child, screen, "current_fixation", "current_foveal"):
-            state.pop(key, None)
-            return ("", Status.self_confidence_but_failed(0.5))
+        child_ok = _foveal_ok(child, screen, "current_fixation", "current_foveal")
         state[key] = {"node": child}
-        return (child["keystrokes"], Status.confidence(1.0))
+        confidence = 1.0 if (pred_ok and child_ok) else 0.5
+        return (child["keystrokes"], Status.confidence(confidence))
 
     result = FutureTensor(
         relative_to, speculative_get,

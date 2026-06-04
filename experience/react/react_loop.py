@@ -95,7 +95,7 @@ def _setup_session(instance_ft, tmpdir):
     """Create tmux session and wait for shell init."""
     setup = ft_sequential(
         ft_tmux_create_session(instance_ft),
-        ft_sleep(instance_ft, 0.5),
+        ft_sleep(instance_ft, 1.0),
     )
     setup.ft_forward(st_make_tensor(["setup"], tmpdir))
 
@@ -138,14 +138,21 @@ def react_loop(
     task: str,
     validator_fn: ValidatorFn,
     config: Optional[ReactConfig] = None,
+    skip_setup: bool = False,
 ) -> bool:
-    """Run the ReAct loop as a static DAG driven by ft_recurrent."""
+    """Run the ReAct loop as a static DAG driven by ft_recurrent.
+
+    Args:
+        skip_setup: If True, skip tmux session creation. The session must
+            already exist (e.g. from a previous react_loop call).
+    """
     if config is None:
         config = ReactConfig()
     config.validator_fn = validator_fn
     tmpdir = tempfile.mkdtemp(prefix="react_loop_")
     instance_ft = ft_make_forwarded(tmpdir, [1], [instance_id])
-    _setup_session(instance_ft, tmpdir)
+    if not skip_setup:
+        _setup_session(instance_ft, tmpdir)
     output, prompt = _compose_dag(instance_ft, engine_step_fn, task, tmpdir, config)
     return _drive_loop(output, prompt, config.max_iterations)
 

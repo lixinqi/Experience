@@ -28,14 +28,22 @@ from experience.future_tensor.status import Status
 from experience.future_tensor.function.tmux_session import tmux_session_prefix
 from experience.future_tensor.function.tmux_send_text_forward import _broadcast_coords
 
-MAX_SEND_KEYS_LEN = 16
+MAX_SEND_KEYS_LEN = 256
 
 
 def _parse_prefix(raw: str) -> Tuple[str, bool]:
-    """Parse 'T '/'C ' prefix → (payload, literal)."""
-    if raw.startswith("T "):
+    """Parse prefix → (payload, literal).
+    TMUX-TEXT-<p> or T-<p> or T <p> = literal text.
+    TMUX-CTRL-<k> or C-<k> or C <k> = ctrl key.
+    """
+    low = raw.lower()
+    if low.startswith("tmux-text-"):
+        return raw[10:], True
+    if low.startswith("tmux-ctrl-"):
+        return raw[10:], False
+    if low.startswith("t-") or low.startswith("t "):
         return raw[2:], True
-    if raw.startswith("C "):
+    if low.startswith("c-") or low.startswith("c "):
         return raw[2:], False
     return raw, True
 

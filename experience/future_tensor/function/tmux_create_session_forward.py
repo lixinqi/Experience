@@ -40,8 +40,7 @@ def tmux_create_session_forward(input_ft: FutureTensor) -> FutureTensor:
             server = libtmux.Server()
             if server.has_session(session_name):
                 session = server.sessions.get(session_name=session_name)
-                pane = session.active_window.active_pane
-                pane.send_keys("clear", enter=True)
+                session.active_window.active_pane.send_keys("clear", enter=True)
                 return ("", Status.confidence(1.0))
             server.new_session(session_name=session_name, attach=False)
             return ("", Status.confidence(1.0))
