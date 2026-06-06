@@ -104,9 +104,13 @@ def tmux_send_keys_forward(
     session_shape = session_name_ft.ft_capacity_shape
 
     async def send_async_get(coordinates: List[int], trajactory: str):
-        raw = (await _read_ft(input_ft, coordinates, shape, trajactory)).strip()
-        if not raw:
+        raw = (await _read_ft(input_ft, coordinates, shape, trajactory))
+        if not raw or not raw.strip():
             return ("", Status.confidence(1.0))
+
+        # Trailing newline = auto-Enter (merged by engine for single-keystroke bash)
+        enter_after = raw.endswith("\n")
+        raw = raw.strip()
 
         payload, literal = _parse_prefix(raw)
         if not payload.strip():
@@ -122,7 +126,7 @@ def tmux_send_keys_forward(
         if literal and len(payload) > MAX_SEND_KEYS_LEN:
             payload = payload[:MAX_SEND_KEYS_LEN]
 
-        pane.send_keys(payload, literal=literal, enter=False)
+        pane.send_keys(payload, literal=literal, enter=enter_after)
         _tmux_outputs_commit(instance_id, payload, pane)
         return ("", Status.confidence(1.0))
 

@@ -189,8 +189,11 @@ def _detect_terminal_state(capture: str) -> str:
     has_file_info = any(l.strip().startswith('"') and ("L," in l or "B" in l or "[New" in l or "[noeol" in l) for l in lines)
     if has_tilde or has_file_info:
         return "vi"
-    # Nano: status bar at bottom
-    if any("GNU nano" in l for l in lines):
+    # Nano/pico: status bar at bottom
+    if any("GNU nano" in l or "UW PICO" in l for l in lines):
+        return "nano"
+    # Nano/pico dialogs: save, exit confirmation
+    if any("File Name to write" in l or "Save modified buffer" in l for l in lines):
         return "nano"
     if any("nano" in l.lower() and ("Read" in l or "File:" in l) for l in lines):
         return "nano"
@@ -242,6 +245,9 @@ def _parse_keystrokes(raw: str) -> List[Tuple[bool, str]]:
             actions.append((False, line[10:]))
         elif low.startswith("tmux-ctrl-"):
             actions.append((True, line[10:]))
+        elif low.startswith("^"):
+            # Nano notation: ^O = Ctrl-O, ^X = Ctrl-X
+            actions.append((True, "C-" + line[1:].lower()))
         elif low.startswith("t-") or low.startswith("t "):
             actions.append((False, line[2:]))
         elif low.startswith("c-") or low.startswith("c "):
@@ -334,18 +340,19 @@ def _build_node_tree(
 def _extract_target(task: str) -> str:
     """Extract the target content from a task description."""
     import re
-    # "contain only the word X" or "contain the word X"
-    m = re.search(r'contain\s+(?:only\s+)?(?:the\s+)?(?:word\s+)?(\S+)', task)
+    # "containing only the word X" or "contain the word X"
+    # Match multi-word targets like "hello nano" not just single words.
+    m = re.search(r'contain(?:ing)?\s+(?:only\s+)?(?:the\s+)?(?:word\s+)?(.+?)(?:\.\s*(?:Save|Then|$)|$)', task)
     if m:
-        return m.group(1).rstrip('.!,;:')
+        return m.group(1).strip().rstrip('.!,;:')
     # "Type: X" or "type X"
-    m = re.search(r'(?:T|t)ype:\s*(\S+)', task)
+    m = re.search(r'(?:T|t)ype:\s*(.+?)(?:\.\s*(?:Save|Then|Press|$)|$)', task)
     if m:
-        return m.group(1).rstrip('.!,;:')
+        return m.group(1).strip().rstrip('.!,;:')
     # "Target: X"
-    m = re.search(r'Target:\s*(\S+)', task)
+    m = re.search(r'Target:\s*(.+?)(?:\.|$)', task)
     if m:
-        return m.group(1).rstrip('.!,;:')
+        return m.group(1).strip().rstrip('.!,;:')
     # Last quoted word
     m = re.findall(r"['\"](\w+)['\"]", task)
     if m:
@@ -358,6 +365,7 @@ def engine_step(
     fixation: FutureTensor,
     mail: FutureTensor,
     task: str,
+    llm_model: str = None,
 ) -> FutureTensor:
     shape = list(capture.ft_capacity_shape)
     schema = list(capture.ft_shape_schema)
@@ -414,32 +422,87 @@ def engine_step(
 
         # One action per call. The react_loop handles sequencing.
         # Each call asks ONE question based on what's on screen.
-        if terminal_state == "bash":
+
+        # Translator-produced key tasks — force without LLM
+        prompt = None  # default: will be set by terminal state branch if no forced action
+        if task.strip() == "TMUX-CTRL-Enter":
+            actions = [(True, "Enter")]
+        elif task.strip() == "TMUX-CTRL-Escape":
+            actions = [(True, "Escape")]
+        else:
+            prompt = "unset"  # signal to enter terminal state branches
+
+        if prompt is None:
+            pass  # forced action taken, skip LLM
+        elif terminal_state == "bash":
             prompt = (
                 f"Bash terminal:\n{capture_text}\n\n"
-                f"Task: {task}\n"
-                f"What shell command to type?"
+                f"Goal: {task}\n"
+                f"Reply ONE shell command."
             )
         elif terminal_state == "vi":
             if "-- INSERT --" in capture_text:
-                prompt = (
-                    f"{capture_text}{target_info}\n\n"
-                    f"Task: {task}\n"
-                    f"Type text, or reply TMUX-CTRL-Escape to exit"
-                )
+                # Safety guard: if the target text is already present in the
+                # buffer, auto-Escape — the LLM ignores prompts and keeps
+                # typing the same text infinitely otherwise.
+                if target_hint and target_hint in capture_text:
+                    actions = [(True, "Escape")]
+                    prompt = None
+                else:
+                    prompt = (
+                        f"{capture_text}\n\n"
+                        f"Goal: {task}\n"
+                        f"You are typing into vi. Type the needed text. "
+                        f"When done, reply TMUX-CTRL-Escape."
+                    )
             else:
-                prompt = (
-                    f"{capture_text}{target_info}\n\n"
-                    f"Task: {task}\n"
-                    f"Pick one action: i (edit) | dd (delete line) | x (delete char) | :wq (save and quit)\n"
-                    f"Reply with only the action word."
-                )
+                # Vi normal mode — derive immediate action from screen state
+                has_content = bool(content_lines)
+                if not has_content:
+                    # Empty buffer: need to enter insert mode and type
+                    prompt = (
+                        f"{capture_text}\n\n"
+                        f"Goal: {task}\n"
+                        f"Vi normal mode, empty file. Press i to start typing."
+                    )
+                elif target_hint and target_hint in capture_text:
+                    # Target content is in the buffer — save and quit
+                    prompt = (
+                        f"{capture_text}\n\n"
+                        f"Vi normal mode. Content matches goal. Type :wq to save and quit."
+                    )
+                else:
+                    # Has content but doesn't match target — need editing
+                    prompt = (
+                        f"{capture_text}\n\n"
+                        f"Goal: {task}\n"
+                        f"Vi normal mode. Content exists but may need editing.\n"
+                        f"Pick ONE: i (edit) | dd (delete line) | :wq (save+quit)"
+                    )
         elif terminal_state == "nano":
-            prompt = (
-                f"Nano editor:\n{capture_text}\n\n"
-                f"Task: {task}\n"
-                f"What ONE action? (T text=type, C c-o=save, C c-x=exit)?"
-            )
+            # Nano/pico dialogs: force known actions without LLM
+            if "File Name to write" in capture_text or "File Name:" in capture_text:
+                actions = [(True, "Enter")]
+                prompt = None
+            elif "Save modified buffer" in capture_text:
+                actions = [(False, "Y")]
+                prompt = None
+            elif "^E" in task or "end of line" in task.lower() or "ctrl-e" in task.lower():
+                actions = [(True, "C-e")]
+                prompt = None
+            elif target_hint and target_hint in capture_text:
+                # Content already in nano buffer — save and exit
+                # Send ^O (save), then the next iteration will detect
+                # "File Name to write" and auto-press Enter
+                actions = [(True, "C-o")]
+                prompt = None
+            else:
+                # Nano editing mode — type text
+                prompt = (
+                    f"{capture_text}\n\n"
+                    f"Goal: {task}\n"
+                    f"Nano editor. Type ONLY the needed text. One line."
+                )
         else:
             prompt = (
                 f"Terminal:\n{capture_text}\n\n"
@@ -451,34 +514,72 @@ def engine_step(
         from experience.llm_client.raw_llm_query import raw_llm_query
         from experience.llm_client.agent_config import RawLlmConfig
 
-        base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
-        if "/anthropic" in base_url:
-            base_url = base_url.replace("/anthropic", "/v1")
-        config = RawLlmConfig(
-            base_url=base_url or os.environ.get("LLM_BASE_URL"),
-            api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("LLM_API_KEY"),
-            model=os.environ.get("ANTHROPIC_MODEL") or os.environ.get("LLM_MODEL"),
-        )
+        if prompt is not None:
+            base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+            if "/anthropic" in base_url:
+                base_url = base_url.replace("/anthropic", "/v1")
+            config = RawLlmConfig(
+                base_url=base_url or os.environ.get("LLM_BASE_URL"),
+                api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("LLM_API_KEY"),
+                model=llm_model or os.environ.get("ANTHROPIC_MODEL") or os.environ.get("LLM_MODEL"),
+            )
 
         try:
-            raw = await raw_llm_query(prompt, config=config,
-                                       extra_body={"thinking": {"type": "disabled"}})
-            actions = _parse_keystrokes(raw)
+            if prompt is not None:
+                raw = await raw_llm_query(prompt, config=config,
+                                           extra_body={"thinking": {"type": "disabled"}})
+                actions = _parse_keystrokes(raw)
 
             if not actions:
                 return ("", Status.self_confidence_but_failed(0.3))
 
-            # For bash: if LLM returned bare text with no Enter, add Enter
-            if terminal_state == "bash":
-                has_enter = any(is_ctrl and t.lower() == "enter" for is_ctrl, t in actions)
-                if not has_enter:
-                    actions.append((True, "Enter"))
-            # For vi: colon commands need Enter to execute
+            # Only take the first action — multi-action responses cause
+            # cascading failures because speculative_keystroke only returns
+            # the root node. The LLM must decide one step at a time.
+            actions = actions[:1]
+
+            # Vi normal mode safety: if LLM returns multi-char text that
+            # doesn't start with ":" (colon command), it's trying to do
+            # everything at once (e.g. "ihello<ESC>ZZ"). Truncate to
+            # first char — valid vi commands are single-char (i, a, o, x).
+            if terminal_state == "vi" and "-- INSERT --" not in capture_text:
+                if actions and not actions[0][0] and len(actions[0][1]) > 1 \
+                        and not actions[0][1].startswith(":"):
+                    actions[0] = (False, actions[0][1][0])
+
+            # Nano: if appending to existing text, prepend a space
+            if terminal_state == "nano" and not any(
+                kw in capture_text for kw in ("File Name", "Save modified")
+            ):
+                content_lines = [l for l in capture_text.split("\n")
+                                 if l.strip() and not l.startswith(("^","UW","File"))]
+                if content_lines and actions and not actions[0][0]:
+                    text = actions[0][1]
+                    if text and not text.startswith(" "):
+                        actions[0] = (False, " " + text)
+
+            # For vi: colon commands need Enter to execute.
+            # Merge into the text with \n so the tree has one node.
             if terminal_state == "vi":
                 has_enter = any(is_ctrl and t.lower() == "enter" for is_ctrl, t in actions)
                 has_colon = any(not is_ctrl and t.startswith(":") for is_ctrl, t in actions)
                 if has_colon and not has_enter:
-                    actions.append((True, "Enter"))
+                    for i, (is_ctrl, t) in enumerate(actions):
+                        if not is_ctrl and t.startswith(":"):
+                            actions[i] = (False, t + "\n")
+                            break
+
+            # For bash: text commands need Enter to execute.
+            # Merge into a single text keystroke (append \n) so the tree
+            # has one node — speculative_keystroke only returns the root.
+            if terminal_state == "bash":
+                has_text = any(not is_ctrl for is_ctrl, t in actions)
+                has_enter = any(is_ctrl and t.lower() == "enter" for is_ctrl, t in actions)
+                if has_text and not has_enter:
+                    for i, (is_ctrl, t) in enumerate(actions):
+                        if not is_ctrl:
+                            actions[i] = (False, t + "\n")
+                            break
 
             # Build the KeystrokeNode tree with adaptor-predicted foveals
             node = _build_node_tree(capture_text, row, col, actions)
@@ -486,7 +587,7 @@ def engine_step(
         except Exception as e:
             return (f"Error: {e}", Status.self_confidence_but_failed(0.3))
 
-    ft = FutureTensor(relative_to, _engine_get, [sympy.Integer(s) for s in shape])
+    ft = FutureTensor(relative_to, _engine_get, list(schema))
     ft.ft_capacity_shape = list(shape)
     ft.requires_grad_(True)
     return ft

@@ -55,6 +55,7 @@ class ReactConfig:
     mismatch_tolerance: int = 3
     fixation_start: Tuple[int, int] = (0, 0)
     step_budget: int = 8
+    llm_model: Optional[str] = None  # override ANTHROPIC_MODEL env var
 
 
 # engine_step signature per engine_step.viba:

@@ -7,7 +7,7 @@ Simple: validate current_foveal at current_fixation.
 """
 
 import os
-from typing import Dict, List
+from typing import List
 
 import sympy
 
@@ -49,43 +49,20 @@ def ft_speculative_keystroke(
     shape = engine_input.ft_capacity_shape
     schema = engine_input.ft_shape_schema
     relative_to = engine_input.ft_initial_static_tensor.st_relative_to
-    state: Dict[tuple, dict] = {}
-
     async def speculative_get(coordinates: List[int], trajectory: str):
-        key = tuple(coordinates[:-1]) if len(coordinates) > 1 else ()
-        iter_idx = coordinates[-1] if coordinates else 0
         screen = await _read_ft(screen_capture, coordinates, trajectory)
-        cur = state.get(key)
 
-        # Done — tree exhausted
-        if cur and cur.get("done"):
-            return ("", Status.confidence(1.0))
-
-        # Fresh pull or first iteration
-        if cur is None or iter_idx == 0:
-            text = await _read_ft(engine_input, coordinates, trajectory)
-            tree = KeystrokeNode.deserialize(text)
-            if not tree:
-                return ("", Status.self_confidence_but_failed(0.5))
-            foveal_pass = _foveal_ok(tree, screen, "current_fixation", "current_foveal")
-            state[key] = {"node": tree}
-            confidence = 1.0 if foveal_pass else 0.5
-            return (tree["keystrokes"], Status.confidence(confidence))
-
-        # Advance: validate post-send prediction from last node, then advance to child
-        node = cur["node"]
-        pred_ok = _foveal_ok(node, screen, "predicted_next_fixation", "predicted_next_foveal")
-
-        children = node.get("children", [])
-        if not children or not children[0]:
-            state[key] = {"node": node, "done": True}
-            return ("", Status.confidence(1.0))
-
-        child = children[0]
-        child_ok = _foveal_ok(child, screen, "current_fixation", "current_foveal")
-        state[key] = {"node": child}
-        confidence = 1.0 if (pred_ok and child_ok) else 0.5
-        return (child["keystrokes"], Status.confidence(confidence))
+        # Always do a fresh engine pull. Each react_loop iteration captures
+        # a new screen, so the engine must decide based on current state.
+        # The tree-walking optimization is removed — it prevented the
+        # autonomous loop from re-querying the LLM on each iteration.
+        text = await _read_ft(engine_input, coordinates, trajectory)
+        tree = KeystrokeNode.deserialize(text)
+        if not tree:
+            return ("", Status.self_confidence_but_failed(0.5))
+        foveal_pass = _foveal_ok(tree, screen, "current_fixation", "current_foveal")
+        confidence = 1.0 if foveal_pass else 0.5
+        return (tree["keystrokes"], Status.confidence(confidence))
 
     result = FutureTensor(
         relative_to, speculative_get,

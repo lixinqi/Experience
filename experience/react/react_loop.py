@@ -107,7 +107,7 @@ def _compose_dag(instance_ft, engine_step_fn, task, tmpdir, config):
     capture = ft_tmux_capture_pane(expanded)
     fixation = _make_fixation_op(capture, tmpdir)
     mail = _make_mail_op(task, capture, tmpdir)
-    engine_op = engine_step_fn(capture, fixation, mail, task)
+    engine_op = engine_step_fn(capture, fixation, mail, task, llm_model=config.llm_model)
     cmd_spec = ft_speculative_keystroke(engine_op, capture)
     send_keys = ft_tmux_send_keys(cmd_spec, expanded)
     post_capture = ft_sequential(
