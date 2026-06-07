@@ -1,0 +1,7 @@
+gen_keystrokes_until_success :=
+  $data list[str]
+  <- $llm_fn (Awaitable[str] <- $args LLmArgs)
+  <- $construct_retry_prompt (Awaitable[LLmArgs] <- $err list[str] <- $args LLmArgs)
+  # inline
+  <- Import[../high_order_fn/call_llm_until_success.viba]
+  <- Import[../keystroke_dsl/parse_and_expand.viba]

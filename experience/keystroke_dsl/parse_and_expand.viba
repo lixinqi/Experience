@@ -1,0 +1,7 @@
+parse_and_expand :=
+  (Oneof
+    | $ok list[str_starts_with_tmux_text_or_tmux_ctrl]
+    | $err list[ErrorStrWithLinenoHint])
+  <- $raw_keystroke_program str
+  # inline
+  <- { ... }

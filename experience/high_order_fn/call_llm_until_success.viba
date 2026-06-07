@@ -1,0 +1,5 @@
+call_llm_until_success :=
+  $data DataResult
+  <- $llm_fn (Awaitable[str] <- $args LLmArgs)
+  <- $validate_and_transform (($data DataResult | $err list[str]) <- str)
+  <- $construct_retry_prompt (Awaitable[LLmArgs] <- $err list[str] <- $args LLmArgs)

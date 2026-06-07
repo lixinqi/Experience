@@ -229,31 +229,19 @@ def _predict(
 # ── Keystroke parsing ────────────────────────────────────────────────
 
 
-def _parse_keystrokes(raw: str) -> List[Tuple[bool, str]]:
-    """Parse LLM output into list of (is_ctrl, text) actions.
+def _commands_to_actions(commands: List[str]) -> List[Tuple[bool, str]]:
+    """Convert validated DSL command strings to (is_ctrl, text) actions.
 
-    TMUX-TEXT-<payload> = literal text. TMUX-CTRL-<key> = ctrl key.
-    Also accepts legacy T-/C- and T /C  prefixes.
+    "tmux-ctrl Enter"  -> (True,  "Enter")
+    "tmux-text hello"  -> (False, "hello")
     """
     actions = []
-    for line in raw.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
-        low = line.lower()
-        if low.startswith("tmux-text-"):
-            actions.append((False, line[10:]))
-        elif low.startswith("tmux-ctrl-"):
-            actions.append((True, line[10:]))
-        elif low.startswith("^"):
-            # Nano notation: ^O = Ctrl-O, ^X = Ctrl-X
-            actions.append((True, "C-" + line[1:].lower()))
-        elif low.startswith("t-") or low.startswith("t "):
-            actions.append((False, line[2:]))
-        elif low.startswith("c-") or low.startswith("c "):
-            actions.append((True, line[2:]))
-        else:
-            actions.append((False, line))
+    for cmd in commands:
+        low = cmd.lower()
+        if low.startswith("tmux-ctrl "):
+            actions.append((True, cmd[10:].strip()))
+        elif low.startswith("tmux-text "):
+            actions.append((False, cmd[10:].strip()))
     return actions
 
 
@@ -410,6 +398,8 @@ def engine_step(
                 if l and not l.startswith("~") and not l.startswith("-- ")
                 and not l.startswith('"') and "GNU nano" not in l
                 and not l.startswith("^") and not l.startswith("[")
+                and not l.startswith(":")       # vi command-line
+                and not l.strip().isdigit()     # vi line-number-only (empty)
             ]
             if content_lines:
                 last_i, last_l = content_lines[-1]
@@ -441,44 +431,27 @@ def engine_step(
                 f"Reply ONE shell command."
             )
         elif terminal_state == "vi":
-            if "-- INSERT --" in capture_text:
-                # Safety guard: if the target text is already present in the
-                # buffer, auto-Escape — the LLM ignores prompts and keeps
-                # typing the same text infinitely otherwise.
-                if target_hint and target_hint in capture_text:
+            if "Found a swap file" in capture_text or "E325" in capture_text:
+                prompt = f"{capture_text}\nVi found swap file. Output: tmux-text d"
+            elif "-- INSERT --" in capture_text:
+                file_text = "\n".join(l for _, l in content_lines) if content_lines else capture_text
+                if target_hint and target_hint in file_text:
                     actions = [(True, "Escape")]
                     prompt = None
                 else:
                     prompt = (
                         f"{capture_text}\n\n"
-                        f"Goal: {task}\n"
-                        f"You are typing into vi. Type the needed text. "
-                        f"When done, reply TMUX-CTRL-Escape."
+                        f"Vi insert. Output: tmux-text {target_hint or 'the text'}"
                     )
             else:
-                # Vi normal mode — derive immediate action from screen state
                 has_content = bool(content_lines)
                 if not has_content:
-                    # Empty buffer: need to enter insert mode and type
-                    prompt = (
-                        f"{capture_text}\n\n"
-                        f"Goal: {task}\n"
-                        f"Vi normal mode, empty file. Press i to start typing."
-                    )
-                elif target_hint and target_hint in capture_text:
-                    # Target content is in the buffer — save and quit
-                    prompt = (
-                        f"{capture_text}\n\n"
-                        f"Vi normal mode. Content matches goal. Type :wq to save and quit."
-                    )
+                    prompt = f"{capture_text}\n\nVi normal, empty. Output: tmux-text i"
+                elif target_hint and target_hint in "\n".join(l for _, l in content_lines):
+                    prompt = f"{capture_text}\n\nVi normal, done. Output: tmux-text :wq"
                 else:
-                    # Has content but doesn't match target — need editing
-                    prompt = (
-                        f"{capture_text}\n\n"
-                        f"Goal: {task}\n"
-                        f"Vi normal mode. Content exists but may need editing.\n"
-                        f"Pick ONE: i (edit) | dd (delete line) | :wq (save+quit)"
-                    )
+                    ex = f"tmux-text :%s/.../{target_hint}/g" if target_hint else "tmux-text dd"
+                    prompt = f"{capture_text}\n\nVi normal, edit. Output: {ex}"
         elif terminal_state == "nano":
             # Nano/pico dialogs: force known actions without LLM
             if "File Name to write" in capture_text or "File Name:" in capture_text:
@@ -513,6 +486,9 @@ def engine_step(
         import os
         from experience.llm_client.raw_llm_query import raw_llm_query
         from experience.llm_client.agent_config import RawLlmConfig
+        from experience.react.gen_keystrokes_until_success import (
+            gen_keystrokes_until_success,
+        )
 
         if prompt is not None:
             base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
@@ -523,12 +499,26 @@ def engine_step(
                 api_key=os.environ.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("LLM_API_KEY"),
                 model=llm_model or os.environ.get("ANTHROPIC_MODEL") or os.environ.get("LLM_MODEL"),
             )
+            dsl_prompt = (
+                f"{prompt}\n\n"
+                f"Reply one line: tmux-text <text> OR tmux-ctrl <key>. "
+                f"Ctrl keys: Enter Escape Tab C-c C-a C-e C-o C-x "
+                f"Backspace Delete Up Down Left Right Home End F1-F12"
+            )
+            async def _llm_fn(args):
+                return await raw_llm_query(args, config=config,
+                    extra_body={"thinking": {"type": "disabled"}})
+            async def _retry_prompt(errors, args):
+                return f"{args}\n[PARSE ERROR: {'; '.join(errors)}. Reply VALID.]"
+            try:
+                commands = await gen_keystrokes_until_success(
+                    llm_fn=_llm_fn, construct_retry_prompt=_retry_prompt,
+                    initial_args=dsl_prompt, max_retries=2)
+                actions = _commands_to_actions(commands)
+            except RuntimeError:
+                return ("", Status.self_confidence_but_failed(0.3))
 
         try:
-            if prompt is not None:
-                raw = await raw_llm_query(prompt, config=config,
-                                           extra_body={"thinking": {"type": "disabled"}})
-                actions = _parse_keystrokes(raw)
 
             if not actions:
                 return ("", Status.self_confidence_but_failed(0.3))

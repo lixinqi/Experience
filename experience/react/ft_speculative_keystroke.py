@@ -44,25 +44,48 @@ def ft_speculative_keystroke(
 ) -> FutureTensor:
     """Speculative keystroke with foveal validation.
 
-    Walks KeystrokeNode tree. Outputs keystroke if validation passes, empty if not.
+    Walks a KeystrokeNode tree across iterations.  First iteration pulls
+    a fresh tree from the engine.  Subsequent iterations advance to child
+    nodes.  When the tree is exhausted the engine is re-queried.
     """
     shape = engine_input.ft_capacity_shape
     schema = engine_input.ft_shape_schema
     relative_to = engine_input.ft_initial_static_tensor.st_relative_to
-    async def speculative_get(coordinates: List[int], trajectory: str):
-        screen = await _read_ft(screen_capture, coordinates, trajectory)
+    state: dict = {}  # prefix -> {"node": KeystrokeNode dict}
 
-        # Always do a fresh engine pull. Each react_loop iteration captures
-        # a new screen, so the engine must decide based on current state.
-        # The tree-walking optimization is removed — it prevented the
-        # autonomous loop from re-querying the LLM on each iteration.
-        text = await _read_ft(engine_input, coordinates, trajectory)
-        tree = KeystrokeNode.deserialize(text)
-        if not tree:
-            return ("", Status.self_confidence_but_failed(0.5))
-        foveal_pass = _foveal_ok(tree, screen, "current_fixation", "current_foveal")
-        confidence = 1.0 if foveal_pass else 0.5
-        return (tree["keystrokes"], Status.confidence(confidence))
+    async def speculative_get(coordinates: List[int], trajectory: str):
+        key = tuple(coordinates[:-1]) if len(coordinates) > 1 else ()
+        iter_idx = coordinates[-1] if coordinates else 0
+        screen = await _read_ft(screen_capture, coordinates, trajectory)
+        cur = state.get(key)
+
+        # Fresh tree from engine: no cached tree, or first iteration.
+        if cur is None or iter_idx == 0:
+            if cur is None and iter_idx > 0:
+                # Tree was exhausted in a prior iteration — start fresh.
+                pass
+            text = await _read_ft(engine_input, coordinates, trajectory)
+            tree = KeystrokeNode.deserialize(text)
+            if not tree:
+                return ("", Status.self_confidence_but_failed(0.5))
+            ok = _foveal_ok(tree, screen, "current_fixation", "current_foveal")
+            # If tree has children, keep it for walking.  If single-node
+            # (no children), still return it but the next iter_idx==0 will refresh.
+            state[key] = {"node": tree, "fresh": True}
+            return (tree["keystrokes"], Status.confidence(1.0 if ok else 0.5))
+
+        # Walk to next child.
+        node = cur["node"]
+        children = node.get("children", [])
+        if not children or not children[0]:
+            # Tree exhausted — re-query engine next time.
+            del state[key]
+            return ("", Status.confidence(1.0))
+
+        child = children[0]
+        child_ok = _foveal_ok(child, screen, "current_fixation", "current_foveal")
+        state[key] = {"node": child}
+        return (child["keystrokes"], Status.confidence(1.0 if child_ok else 0.5))
 
     result = FutureTensor(
         relative_to, speculative_get,
