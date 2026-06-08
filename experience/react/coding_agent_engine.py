@@ -1,7 +1,8 @@
 """
 CodingAgentEngine: Keeps a ducc REPL warm with --add-dir.
 Each react_loop iteration captures the screen, sends it to ducc via
-file IPC, ducc outputs ONE keystroke based on the current screen.
+query_interactive_repl_coding_agent, ducc outputs ONE keystroke
+based on the current screen.
 The warm REPL keeps KV cache across calls.
 """
 
@@ -17,6 +18,9 @@ from experience.react.react_types import KeystrokeNode
 from experience.react.fixation import extract_foveal
 from experience.react.raw_llm_engine import _predict
 from experience.keystroke_dsl.parse_and_expand import parse_and_expand, ParseOk
+from experience.react.query_interactive_repl_coding_agent import (
+    query_interactive_repl_coding_agent,
+)
 
 
 async def _read_ft(ft, coordinates):
@@ -31,18 +35,24 @@ async def _read_ft(ft, coordinates):
 
 
 def _first_valid_cmd(raw: str) -> Optional[str]:
-    """Extract the first valid DSL command from ducc output."""
-    # Strip markdown fences and quotes
+    """Extract the first valid keystroke DSL command from ducc output.
+
+    The DSL grammar supports ``;`` as a statement separator, so chained
+    commands like ``tmux-text a; tmux-text b`` parse as two statements.
+    Quoted strings (``tmux-text ";"``) produce a literal semicolon.
+    """
     for line in raw.strip().strip("`").split("\n"):
         line = line.strip()
         if line.startswith("```") or not line:
             continue
-        # Strip surrounding quotes from tmux-text arg
+        # Strip surrounding quotes from tmux-text arg (ducc sometimes
+        # wraps the text value in quotes).
         if line.startswith("tmux-text "):
             arg = line[10:]
             if (arg.startswith('"') and arg.endswith('"')) or \
                (arg.startswith("'") and arg.endswith("'")):
-                line = "tmux-text " + arg[1:-1]
+                arg = arg[1:-1]
+                line = "tmux-text " + arg
         if line.startswith("tmux-text ") or line.startswith("tmux-ctrl "):
             result = parse_and_expand(line)
             if isinstance(result, ParseOk) and result.ok:
@@ -90,6 +100,7 @@ class CodingAgentEngine:
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self._launched = False
+        self._ducc_launched = False
 
     def __call__(self, capture, fixation, mail, task,
                  llm_model=None) -> FutureTensor:
@@ -116,42 +127,32 @@ class CodingAgentEngine:
             if pane is None:
                 return ("", Status.self_confidence_but_failed(0.3))
 
-            # Write prompt to file
-            prompt_file = self.work_dir / "prompt.txt"
-            out_file = self.work_dir / "output.txt"
-            out_file.unlink(missing_ok=True)
-
+            # Build prompt and query interactive ducc via
+            # query_interactive_repl_coding_agent.  Its validate_notify
+            # handles permission prompts, idle reminders, and output
+            # validation — no manual polling needed.
             prompt = (
                 "Terminal:\n" + cap + "\n\n"
                 "Task: " + task + "\n\n"
-                "Reply ONE line: tmux-text <text> OR tmux-ctrl <key>\n"
+                "Reply with keystroke DSL commands. "
+                "You can chain multiple commands with ; on one line.\n"
+                "tmux-text <text> — type literal text\n"
+                "tmux-ctrl <key>  — press a control key\n"
+                "Use tmux-text \";\" to type a literal semicolon.\n"
                 "Ctrl keys: Enter Escape Tab C-c C-a C-e C-o C-x "
                 "Backspace Delete Up Down Left Right Home End F1-F12\n"
-                "NO markdown. NO explanation. ONE line. "
-                "Write to " + str(out_file)
+                "Do not reply in chat. Use the Write tool to save your answer."
             )
-            prompt_file.write_text(prompt)
 
-            # Feed to warm ducc REPL: tell it to read the file and output to out_file
-            cmd = (
-                "cat %s | ducc --print --add-dir %s --allow-dangerously-skip-permissions "
-                "> %s 2>&1" % (prompt_file, str(self.work_dir), out_file)
-            )
-            pane.send_keys(cmd, enter=True)
-
-            # Wait for output
-            deadline = time.time() + 60
-            while time.time() < deadline:
-                if out_file.exists() and out_file.stat().st_size > 0:
-                    raw = out_file.read_text().strip()
-                    if "tmux-" in raw.lower():
-                        break
-                time.sleep(0.3)
-
-            if not out_file.exists():
+            try:
+                raw = query_interactive_repl_coding_agent(
+                    online_tmux_session_name=self.session_name,
+                    get_query=lambda output_path: prompt + " Save to " + output_path,
+                    interval_seconds=0.5,
+                )
+            except Exception:
                 return ("", Status.self_confidence_but_failed(0.3))
 
-            raw = out_file.read_text().strip()
             cmd = _first_valid_cmd(raw)
             if cmd is None:
                 return ("", Status.self_confidence_but_failed(0.3))
@@ -180,25 +181,40 @@ class CodingAgentEngine:
             return None
 
     def _ensure_launched(self):
-        if self._launched:
+        if self._launched and self._ducc_launched:
             return
         try:
             server = libtmux.Server()
+            pane = None
             for s in server.sessions:
                 if s.session_name == self.session_name:
-                    self._launched = True
-                    return
-            session = server.new_session(session_name=self.session_name,
-                                         attach=False)
-            time.sleep(0.3)
-            pane = session.active_window.active_pane
-            pane.send_keys("unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT", enter=True)
-            time.sleep(0.1)
-            flash = os.path.expanduser("~/.llm-config/flash-env.sh")
-            if os.path.isfile(flash):
-                pane.send_keys("source " + flash, enter=True)
+                    pane = s.active_window.active_pane
+                    break
+
+            if pane is None:
+                session = server.new_session(session_name=self.session_name,
+                                             attach=False)
+                time.sleep(0.3)
+                pane = session.active_window.active_pane
+
+            if not self._launched:
+                pane.send_keys("unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT", enter=True)
                 time.sleep(0.1)
-            self._launched = True
+                flash = os.path.expanduser("~/.llm-config/flash-env.sh")
+                if os.path.isfile(flash):
+                    pane.send_keys("source " + flash, enter=True)
+                    time.sleep(0.1)
+                self._launched = True
+
+            if not self._ducc_launched:
+                pane.send_keys(
+                    "ducc --add-dir " + str(self.work_dir) +
+                    " --allow-dangerously-skip-permissions"
+                    " --permission-mode bypassPermissions",
+                    enter=True,
+                )
+                time.sleep(4)  # wait for ducc to start
+                self._ducc_launched = True
         except Exception:
             pass
 

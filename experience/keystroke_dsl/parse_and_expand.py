@@ -160,7 +160,7 @@ if __name__ == "__main__":
         ok(parse_and_expand("tmux-ctrl C-c"),
            ["tmux-ctrl C-c"], "ctrl combo")
         ok(parse_and_expand('tmux-text "hello"'),
-           ['tmux-text "hello"'], "quotes are literal")
+           ["tmux-text hello"], "quotes are delimiters (stripped)")
 
         # multi-statement
         ok(parse_and_expand("tmux-text echo hi\ntmux-ctrl Enter"),
@@ -195,6 +195,28 @@ if __name__ == "__main__":
         # duplicate macro
         err(parse_and_expand("tmux-macro dup\nbegin\ntmux-text one\nend\ntmux-macro dup\nbegin\ntmux-text two\nend"),
             contains="duplicate macro", label="duplicate macro")
+
+        # semicolon as statement separator
+        ok(parse_and_expand("tmux-text a; tmux-text b"),
+           ["tmux-text a", "tmux-text b"], "; separator")
+        ok(parse_and_expand("tmux-text hello; tmux-ctrl Enter"),
+           ["tmux-text hello", "tmux-ctrl Enter"], "mixed ; sep")
+        ok(parse_and_expand("tmux-text a; tmux-text b; tmux-ctrl Enter"),
+           ["tmux-text a", "tmux-text b", "tmux-ctrl Enter"], "triple ; sep")
+        ok(parse_and_expand("tmux-text a;\ntmux-text b"),
+           ["tmux-text a", "tmux-text b"], ";+newline sep")
+
+        # semicolon inside quoted string is literal
+        ok(parse_and_expand('tmux-text ";"'),
+           ["tmux-text ;"], "quoted literal semicolon")
+        ok(parse_and_expand('tmux-text "hello; world"'),
+           ["tmux-text hello; world"], "quoted semicolon preserved")
+        ok(parse_and_expand('tmux-text "echo ONE"; tmux-ctrl Enter'),
+           ["tmux-text echo ONE", "tmux-ctrl Enter"], "quoted text + ctrl")
+
+        # empty text before ;
+        ok(parse_and_expand("tmux-text ; tmux-ctrl Enter"),
+           ["tmux-text ", "tmux-ctrl Enter"], "empty text before ;")
 
         total = passed + failed
         print(f"\n  parse_and_expand: {passed}/{total} passed"

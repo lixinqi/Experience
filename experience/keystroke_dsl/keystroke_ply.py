@@ -1,21 +1,25 @@
 """
 keystroke_ply.py — PLY (Python Lex-Yacc) parser for the keystroke macro DSL.
 
-Grammar (from keystroke-grammar-draft.txt):
+Grammar::
 
-    program        := statement_list
+    program        := statement_list opt_nl
 
     statement_list := ε
-                    | statement_list "\\n+" statement
+                    | statement_list (NEWLINE | SEMI | SEMI NEWLINE) statement
 
     statement      := COMMENT
                     | K_CTRL    BLANK ctrl_constant
                     | K_TEXT    BLANK text_string
                     | K_VAR     BLANK var_symbol
                     | K_EXPAND  BLANK var_symbol_list
-                    | K_MACRO   var_symbol_list K_BEGIN statement_list K_END
+                    | K_MACRO   var_symbol_list NEWLINE K_BEGIN opt_nl statement_list opt_nl K_END
 
-    BLANK = one or more spaces (enforced by key token regex, not a token)
+    text_string    := unquoted_text | '"' quoted_text '"'
+    unquoted_text  := [^;\\n]*   (stops at semicolon or newline)
+    quoted_text    := [^"]*      (semicolons are literal inside quotes)
+
+    BLANK = one or more spaces (enforced by regex pattern, not a token)
 
 Usage:
     from experience.keystroke_dsl.keystroke_ply import parse_keystroke
@@ -56,7 +60,7 @@ tokens = (
     "K_CTRL", "K_TEXT", "K_VAR", "K_EXPAND", "K_MACRO",
     "K_BEGIN", "K_END",
     "CTRL_CONSTANT", "TEXT_STRING", "VAR_SYMBOL",
-    "COMMENT", "NEWLINE",
+    "COMMENT", "NEWLINE", "SEMI",
 )
 
 # ── INITIAL state ────────────────────────────────────────────────────
@@ -101,14 +105,20 @@ def t_VAR_SYMBOL(t):
 # Whitespace — skipped.
 t_ignore = " \t"
 
+# Semicolon — statement separator (same line).
+def t_SEMI(t):
+    r';'
+    return t
+
 def t_error(t):
     raise _LexError(f"Illegal character {t.value[0]!r} at line {t.lexer.lineno}")
 
 # ── text state (after K_TEXT) ────────────────────────────────────────
 
-# In the text state, everything until newline is the text argument.
-# Leading whitespace is skipped, then the rest of the line (quoted
-# or bare) is captured as TEXT_STRING.
+# In the text state, everything until a semicolon or newline is the text
+# argument — unless the text is quoted ("…"), in which case semicolons
+# inside the quotes are literal.  Leading whitespace is stripped (the
+# BLANK separator).
 
 t_text_ignore = ""     # no ignore — spaces are part of the text
 
@@ -120,8 +130,14 @@ def t_text_NEWLINE(t):
     t.value = ""            # empty text argument
     return t
 
+def t_text_SEMI(t):
+    r';'
+    t.lexer.begin("INITIAL")
+    t.type = "SEMI"
+    return t
+
 def t_text_TEXT_STRING(t):
-    r'[^\n]+'
+    r'\ "[^"]*"|[^;\n]+'
     t.lexer.begin("INITIAL")
     v = t.value
     # Strip exactly one leading space (the BLANK separator between
@@ -129,6 +145,10 @@ def t_text_TEXT_STRING(t):
     # text and are preserved verbatim.
     if v.startswith(" "):
         v = v[1:]
+    # Quoted string: "..." — strip the quotes, content is literal
+    # (semicolons inside quotes are NOT separators).
+    if len(v) >= 2 and v.startswith('"') and v.endswith('"'):
+        v = v[1:-1]
     t.value = v
     return t
 
@@ -149,8 +169,13 @@ def p_statement_list_one(p):
     p[0] = [p[1]]
 
 def p_statement_list_many(p):
-    """statement_list : statement_list NEWLINE statement"""
-    p[0] = p[1] + [p[3]]
+    """statement_list : statement_list NEWLINE statement
+                      | statement_list SEMI statement
+                      | statement_list SEMI NEWLINE statement"""
+    if len(p) == 4:
+        p[0] = p[1] + [p[3]]
+    else:
+        p[0] = p[1] + [p[4]]
 
 def p_statement_comment(p):
     """statement : COMMENT"""
@@ -186,6 +211,7 @@ def p_macro_def(p):
 
 def p_opt_nl(p):
     """opt_nl : NEWLINE
+              | SEMI
               | """
     pass
 

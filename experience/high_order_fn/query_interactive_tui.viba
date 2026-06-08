@@ -1,0 +1,32 @@
+query_interactive_tui :=
+  # One send, silent poll.  The function sends exactly one tmux send-keys
+  # (the query + Enter).  After that, zero keystrokes during polling —
+  # only sleep, file read, and screen capture.
+  $query_result str
+  <- $online_tmux_session_name str
+  <- $get_query ($cur_query str <- $output_file_path str)
+  <- $validate_notify ($output_valid bool <- $output_file_path str)
+    # validate_notify is a passive predicate, NOT a hurry notification.
+    # It must never send keystrokes to the agent.  Use screen-capture
+    # comparison (steps 4-6 below) to only call it when the agent is idle.
+  <- $interval_seconds float # default 1.0
+  # inline
+  <- $output_file_path TempFile
+  <- $last_screen str
+  <- {
+    1. tmux send $get_query($output_file_path)
+    2. loop: wait $interval_seconds.
+    3. if output_file_path filled with new content, return the content.
+    4. capture current screen via tmux capture-pane (read-only, no keystrokes).
+    5. if current screen == last_screen:
+         # Agent is idle — screen has not changed since last poll.
+         # Safe to call validate_notify.
+         if validate_notify(output_file_path) == True:
+            return content of output_file_path
+    6. else:
+         # Agent is busy — screen still changing.  Do NOT call
+         # validate_notify.  Do NOT send anything to the agent.
+         # Just update last_screen and keep waiting silently.
+         last_screen = current screen
+    7. goto loop
+  }

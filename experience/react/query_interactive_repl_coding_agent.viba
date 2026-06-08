@@ -1,0 +1,21 @@
+query_interactive_repl_coding_agent :=
+  $query_result str
+  <- $online_tmux_session_name str
+  <- $get_query ($cur_query str <- $output_file_path str)
+  <- $interval_seconds float # default 1.0
+  # inline
+  <- $parse_and_expand Import[../keystroke_dsl/parse_and_expand]
+  <- $validate_notify (... <- ... <- {
+    if coding agent blocked with message like "Do you want to proceed?":
+      tmux send Enter. 
+    elif coding agent stop to wait human new query while no output file saved:
+      tmux send file writing notification.
+    elif output file saved:
+      if parse_and_expand passed:
+        tmux send nothing.
+        return True
+      else
+        tmux send error message of parse_and_expand.
+    return False
+  })
+  <- Import[../high_order_fn/query_interactive_tui]
