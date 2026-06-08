@@ -164,7 +164,7 @@ def test_baseline(
         num_iterations: default 1
         llm_method: default "raw_llm_api", also supports "coding_agent" and "tmux_cc"
         interactive: If True and llm_method="tmux_cc", run in tmux for visual observation.
-            Use `tmux attach -t <session>` to watch ducc in real-time.
+            Use `tmux attach -t <session>` to watch Claude in real-time.
         auto_confirm: If True (and interactive), auto-confirm prompts in tmux.
         tmux_session: Custom tmux session name (interactive mode only).
         seed: Random seed for dataset generation reproducibility.

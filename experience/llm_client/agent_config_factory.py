@@ -16,13 +16,13 @@ from experience.llm_client.config import get_config
 from experience.llm_client.agent_binary_provider import AgentBinaryProvider, get_default_provider
 
 # Backward compatibility
-from experience.llm_client.agent_binary_provider import DuccProvider
+from experience.llm_client.agent_binary_provider import ClaudeProvider
 
 
 class AgentConfigFactory:
     """Factory for creating agent configurations.
     
-    This is the only place that knows about ducc, settings.json, environment variables,
+    This is the only place that knows about Claude, settings.json, environment variables,
     and other implementation-specific details.
     """
     
@@ -61,7 +61,7 @@ class AgentConfigFactory:
         permission_mode: str = "acceptEdits",
         model: Optional[str] = None,
         agent_provider: Optional[AgentBinaryProvider] = None,
-        ducc_provider: Optional["DuccProvider"] = None,  # Backward compatibility
+        claude_provider: Optional["ClaudeProvider"] = None,  # Backward compatibility
     ) -> ClaudeAgentConfig:
         """Create configuration for coding_agent method (agent programmatic mode).
         
@@ -71,14 +71,14 @@ class AgentConfigFactory:
             permission_mode: Permission mode.
             model: Model name override.
             agent_provider: Optional agent binary provider (for custom installations).
-            ducc_provider: Deprecated. Use agent_provider instead. Kept for backward compatibility.
+            claude_provider: Deprecated. Use agent_provider instead. Kept for backward compatibility.
         
         Returns:
             ClaudeAgentConfig instance.
         """
-        # Handle backward compatibility: ducc_provider -> agent_provider
-        if ducc_provider is not None and agent_provider is None:
-            agent_provider = ducc_provider
+        # Handle backward compatibility: claude_provider -> agent_provider
+        if claude_provider is not None and agent_provider is None:
+            agent_provider = claude_provider
         
         # Use provided provider or default
         if agent_provider is None:
@@ -120,21 +120,21 @@ class AgentConfigFactory:
     def create_tmux_cc_config(
         model: Optional[str] = None,
         agent_provider: Optional[AgentBinaryProvider] = None,
-        ducc_provider: Optional["DuccProvider"] = None,  # Backward compatibility
+        claude_provider: Optional["ClaudeProvider"] = None,  # Backward compatibility
     ) -> TmuxCcConfig:
         """Create configuration for tmux_cc method (agent interactive/batch mode).
         
         Args:
             model: Model name override.
             agent_provider: Optional agent binary provider (for custom installations).
-            ducc_provider: Deprecated. Use agent_provider instead. Kept for backward compatibility.
+            claude_provider: Deprecated. Use agent_provider instead. Kept for backward compatibility.
         
         Returns:
             TmuxCcConfig instance.
         """
-        # Handle backward compatibility: ducc_provider -> agent_provider
-        if ducc_provider is not None and agent_provider is None:
-            agent_provider = ducc_provider
+        # Handle backward compatibility: claude_provider -> agent_provider
+        if claude_provider is not None and agent_provider is None:
+            agent_provider = claude_provider
         
         # Use provided provider or default
         if agent_provider is None:
@@ -199,7 +199,7 @@ def create_agent_config(
     permission_mode: str = "acceptEdits",
     model: Optional[str] = None,
     agent_provider: Optional[AgentBinaryProvider] = None,
-    ducc_provider: Optional["DuccProvider"] = None,  # Backward compatibility
+    claude_provider: Optional["ClaudeProvider"] = None,  # Backward compatibility
 ) -> ClaudeAgentConfig:
     """Create coding_agent configuration with smart defaults.
     
@@ -207,7 +207,7 @@ def create_agent_config(
     For backward compatibility with coding_agent_query.
     
     Args:
-        ducc_provider: Deprecated. Use agent_provider instead.
+        claude_provider: Deprecated. Use agent_provider instead.
     """
     return AgentConfigFactory.create_claude_agent_config(
         cwd=cwd,
@@ -215,5 +215,5 @@ def create_agent_config(
         permission_mode=permission_mode,
         model=model,
         agent_provider=agent_provider,
-        ducc_provider=ducc_provider,
+        claude_provider=claude_provider,
     )

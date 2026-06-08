@@ -38,12 +38,12 @@ class AgentBinaryProvider(ABC):
 
 
 class ClaudeCodeProvider(AgentBinaryProvider):
-    """Provider for Claude Code (ducc/cc) binary from Comate extension.
+    """Provider for Claude Code binary from Comate extension.
     
     Search order:
     1. TMUX_CC_BIN environment variable
-    2. ~/.comate/extensions/baidu.baidu-cc-*/resources/native-binary/bin/ducc (glob)
-    3. ducc in PATH (fallback)
+    2. ~/.comate/extensions/baidu.baidu-cc-*/resources/native-binary/bin/claude (glob)
+    3. claude in PATH (fallback)
     """
 
     def get_cli_path(self) -> Optional[str]:
@@ -53,14 +53,14 @@ class ClaudeCodeProvider(AgentBinaryProvider):
 
         # 2. Glob pattern for comate extension (preferred)
         pattern = os.path.expanduser(
-            "~/.comate/extensions/baidu.baidu-cc-*/resources/native-binary/bin/ducc"
+            "~/.comate/extensions/baidu.baidu-cc-*/resources/native-binary/bin/claude"
         )
         matches = sorted(glob.glob(pattern), reverse=True)
         if matches:
             return matches[0]
 
         # 3. Check PATH (fallback)
-        if path_bin := shutil.which("ducc"):
+        if path_bin := shutil.which("claude"):
             return path_bin
 
         return None
@@ -91,7 +91,7 @@ class EnvironmentAgentProvider(AgentBinaryProvider):
     """Provider that reads agent paths from environment variables only."""
 
     def get_cli_path(self) -> Optional[str]:
-        return os.environ.get("TMUX_CC_BIN") or shutil.which("ducc")
+        return os.environ.get("TMUX_CC_BIN") or shutil.which("claude")
 
     def get_settings_path(self) -> Optional[str]:
         return os.environ.get("AGENT_SETTINGS_PATH")
@@ -124,7 +124,7 @@ def set_default_provider(provider: AgentBinaryProvider) -> None:
 
 
 # Backward compatibility aliases
-DuccProvider = AgentBinaryProvider
-ComateDuccProvider = ClaudeCodeProvider
-CustomDuccProvider = CustomAgentProvider
-EnvironmentDuccProvider = EnvironmentAgentProvider
+ClaudeProvider = AgentBinaryProvider
+ComateClaudeProvider = ClaudeCodeProvider
+CustomClaudeProvider = CustomAgentProvider
+EnvironmentClaudeProvider = EnvironmentAgentProvider

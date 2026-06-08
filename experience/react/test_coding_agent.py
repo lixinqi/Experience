@@ -64,7 +64,7 @@ def main():
     print("=" * 60)
 
     engine = CodingAgentEngine(
-        agent_type="ducc",
+        agent_type="claude",
         inner_session_id=INNER_SESSION_ID,
         work_dir=WORK_DIR,
     )

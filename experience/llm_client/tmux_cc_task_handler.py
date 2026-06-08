@@ -299,7 +299,7 @@ def _wait_for_tmux_cc_idle(
     last_content = ""
     idle_count = 0
     start_time = time.time()
-    task_started = False  # True after we see ducc start processing (e.g., tool calls)
+    task_started = False  # True after we see Claude start processing (e.g., tool calls)
     command_completed = False
 
     while True:
@@ -322,7 +322,7 @@ def _wait_for_tmux_cc_idle(
                 last_content = ""  # Reset to re-check
                 continue
 
-        # Check if ducc has started processing the task
+        # Check if Claude has started processing the task
         # Look for tool call indicators like "Read(", "Write(", "Edit(", or thinking indicators
         if not task_started:
             task_indicators = ['Read(', 'Write(', 'Edit(', '⏺', 'Thinking', 'Reading', 'Writing']
@@ -350,13 +350,13 @@ def _wait_for_tmux_cc_idle(
         # 3. "Done." message from tmux_cc
         # 4. tmux_cc idle state: empty prompt line with ❯ at the end (after processing)
         if not command_completed:
-            # Check if ducc is still thinking/working
-            # These indicators mean ducc is NOT done yet
+            # Check if Claude is still thinking/working
+            # These indicators mean Claude is NOT done yet
             still_working_indicators = ['Proofing', 'Thinking', 'thinking', 'Searching', 'Reading', 'Writing', 'Editing']
             is_still_working = any(ind in clean_content for ind in still_working_indicators)
             
             if is_still_working:
-                print(f"[tmux_cc] ducc still working (detected active indicator)", file=sys.stderr)
+                print(f"[tmux_cc] Claude still working (detected active indicator)", file=sys.stderr)
                 last_content = content
                 time.sleep(check_interval)
                 continue
@@ -450,7 +450,7 @@ def _create_task_workspace(
 
 
 def _build_file_based_prompt(workspace_dir: str, todo_file_path: str, todo_file_content_hint: str) -> str:
-    """Build a prompt that instructs ducc to read input from files.
+    """Build a prompt that instructs Claude to read input from files.
 
     Args:
         workspace_dir: The task workspace directory (contains input/ and output/)
@@ -458,7 +458,7 @@ def _build_file_based_prompt(workspace_dir: str, todo_file_path: str, todo_file_
         todo_file_content_hint: The placeholder string to replace
 
     Returns:
-        A short prompt that tells ducc where to find the input files and where to write output.
+        A short prompt that tells Claude where to find the input files and where to write output.
     """
     prompt = f"""Please complete the following task:
 
@@ -481,7 +481,7 @@ IMPORTANT:
 
 
 class TmuxCcTaskHandler:
-    """Handler for running tasks via tmux_cc (ducc) CLI.
+    """Handler for running tasks via tmux_cc (Claude) CLI.
 
     Supports two modes:
     - interactive=False (default): Run tmux_cc via subprocess, non-interactive
@@ -511,7 +511,7 @@ class TmuxCcTaskHandler:
         self.tmux_cc_bin = config.get_cli_path()
         if self.tmux_cc_bin is None:
             raise FileNotFoundError(
-                "Cannot find tmux_cc (ducc) binary. Please configure properly."
+                "Cannot find tmux_cc (Claude) binary. Please configure properly."
             )
 
     def __call__(
@@ -577,7 +577,7 @@ class TmuxCcTaskHandler:
                     )
 
                     # Build file-based prompt
-                    ducc_prompt = _build_file_based_prompt(
+                    claude_prompt = _build_file_based_prompt(
                         task_workspace, todo_file_path, todo_file_content_hint
                     )
 
@@ -610,7 +610,7 @@ class TmuxCcTaskHandler:
 
                     cmd = [
                         self.tmux_cc_bin,
-                        "-p", ducc_prompt,
+                        "-p", claude_prompt,
                         "--allowedTools", "Read,Edit,Write",
                         "--permission-mode", "bypassPermissions",
                         "--effort", "low",
@@ -637,7 +637,7 @@ class TmuxCcTaskHandler:
                         env=run_env,
                     )
                     
-                    # Restore settings.json after ducc completes
+                    # Restore settings.json after Claude completes
                     _restore_settings_json(settings_backup)
 
                     if result.returncode != 0:
@@ -654,7 +654,7 @@ class TmuxCcTaskHandler:
 
         This mode:
         1. Creates a workspace directory with input files
-        2. Starts ducc in tmux with a short prompt pointing to the files
+        2. Starts Claude in tmux with a short prompt pointing to the files
         3. Waits for completion (output is handled by coding_agent.py)
         """
         flat_tasks = _flatten_nested(all_tasks)
@@ -689,7 +689,7 @@ class TmuxCcTaskHandler:
                     )
 
                     # Build file-based prompt
-                    ducc_prompt = _build_file_based_prompt(
+                    claude_prompt = _build_file_based_prompt(
                         task_workspace, todo_file_path, todo_file_content_hint
                     )
 
@@ -764,7 +764,7 @@ class TmuxCcTaskHandler:
                     time.sleep(2)
 
                     # Step 5: Send the short file-based prompt (much shorter than before!)
-                    _tmux_send_keys(session_name, ducc_prompt, "Enter")
+                    _tmux_send_keys(session_name, claude_prompt, "Enter")
 
                     # Step 6: Wait for tmux_cc to complete the task
                     print(f"[tmux_cc] Waiting for tmux_cc to process task...", file=sys.stderr)

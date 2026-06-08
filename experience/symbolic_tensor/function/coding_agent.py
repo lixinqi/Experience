@@ -29,7 +29,7 @@ from experience.llm_client.task_handler import TaskHandler
 def _copy_back_to_storage(mutable_dir: str, output_tensor: torch.Tensor, row_idx: int) -> None:
     """Copy LLM results from mutable workspace dir back to the original output tensor storage.
 
-    Since LLM tools (like ducc's Write) may delete and recreate files (breaking symlinks),
+    Since LLM tools (like Claude's Write) may delete and recreate files (breaking symlinks),
     we read from the workspace file and write directly to the original tensor's storage.
 
     Args:
@@ -46,7 +46,7 @@ def _copy_back_to_storage(mutable_dir: str, output_tensor: torch.Tensor, row_idx
         print(f"[_copy_back_to_storage] File not found: {mutable_file}", file=sys.stderr)
         return
     
-    # Check if it's a symlink (ducc should have replaced it with a regular file)
+    # Check if it's a symlink (Claude should have replaced it with a regular file)
     is_symlink = os.path.islink(mutable_file)
     
     # Read content from workspace file
@@ -57,7 +57,7 @@ def _copy_back_to_storage(mutable_dir: str, output_tensor: torch.Tensor, row_idx
     content_preview = content[:50].replace('\n', '\\n') if content else "(empty)"
     print(f"[_copy_back_to_storage] row={row_idx}, symlink={is_symlink}, content={content_preview}...", file=sys.stderr)
     
-    # Skip if content is still the placeholder (ducc didn't write)
+    # Skip if content is still the placeholder (Claude didn't write)
     if content.strip() == "TODO":
         print(f"[_copy_back_to_storage] WARNING: Content still 'TODO', skipping copy", file=sys.stderr)
         return

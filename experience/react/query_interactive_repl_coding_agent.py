@@ -1,5 +1,5 @@
 """
-query_interactive_repl_coding_agent — Query an interactive ducc REPL via
+query_interactive_repl_coding_agent — Query an interactive Claude REPL via
 query_interactive_tui with a smart validate_notify that handles permission
 prompts, idle reminders, and output validation.
 
@@ -53,24 +53,24 @@ def query_interactive_repl_coding_agent(
     get_query: Callable[[str], str],
     interval_seconds: float = 1.0,
 ) -> str:
-    """Query an interactive ducc REPL and wait for a valid keystroke command.
+    """Query an interactive Claude REPL and wait for a valid keystroke command.
 
     Delegates to :func:`query_interactive_tui` with a smart
     ``validate_notify`` that:
 
     * Auto-approves "Do you want to proceed?" permission prompts.
-    * Reminds ducc to write to the output file when it appears idle.
+    * Reminds Claude to write to the output file when it appears idle.
     * Validates the output with ``parse_and_expand`` and signals
       readiness when a valid keystroke DSL command is detected.
 
     Args:
-        online_tmux_session_name: Name of the tmux session running ducc.
+        online_tmux_session_name: Name of the tmux session running Claude.
         get_query: Called with ``output_file_path`` to produce the chat
-            message sent to ducc.
+            message sent to Claude.
         interval_seconds: Seconds between polls (default 1.0).
 
     Returns:
-        The validated keystroke DSL command from ducc as a string.
+        The validated keystroke DSL command from Claude as a string.
     """
     def validate_notify(output_path: str) -> bool:
         screen = _capture_screen(online_tmux_session_name)

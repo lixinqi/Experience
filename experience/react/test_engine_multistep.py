@@ -59,7 +59,7 @@ def main():
     task = "Step 1: echo MARKER_ONE, Enter. Step 2: echo MARKER_TWO, Enter."
     config = ReactConfig(max_iterations=10, step_budget=4)
     engine = CodingAgentEngine(
-        agent_type="ducc",
+        agent_type="claude",
         inner_session_id=INNER_SESSION_ID,
         work_dir=WORK_DIR,
     )

@@ -1,7 +1,7 @@
 """
-CodingAgentEngine: Keeps a ducc REPL warm with --add-dir.
-Each react_loop iteration captures the screen, sends it to ducc via
-query_interactive_repl_coding_agent, ducc outputs ONE keystroke
+CodingAgentEngine: Keeps a Claude REPL warm with --add-dir.
+Each react_loop iteration captures the screen, sends it to Claude via
+query_interactive_repl_coding_agent, Claude outputs ONE keystroke
 based on the current screen.
 The warm REPL keeps KV cache across calls.
 """
@@ -35,7 +35,7 @@ async def _read_ft(ft, coordinates):
 
 
 def _first_valid_cmd(raw: str) -> Optional[str]:
-    """Extract the first valid keystroke DSL command from ducc output.
+    """Extract the first valid keystroke DSL command from Claude output.
 
     The DSL grammar supports ``;`` as a statement separator, so chained
     commands like ``tmux-text a; tmux-text b`` parse as two statements.
@@ -45,7 +45,7 @@ def _first_valid_cmd(raw: str) -> Optional[str]:
         line = line.strip()
         if line.startswith("```") or not line:
             continue
-        # Strip surrounding quotes from tmux-text arg (ducc sometimes
+        # Strip surrounding quotes from tmux-text arg (Claude sometimes
         # wraps the text value in quotes).
         if line.startswith("tmux-text "):
             arg = line[10:]
@@ -91,16 +91,16 @@ def _cmd_to_node(cmd: str, capture_text: str = "",
 
 
 class CodingAgentEngine:
-    """Reactive engine: warm ducc REPL, one keystroke per screen capture."""
+    """Reactive engine: warm Claude REPL, one keystroke per screen capture."""
 
-    def __init__(self, agent_type: str = "ducc", inner_session_id: str = "",
+    def __init__(self, agent_type: str = "claude", inner_session_id: str = "",
                  work_dir: str = "", launch_cmd: Optional[str] = None):
         self.inner_session_id = inner_session_id
         self.session_name = tmux_session_prefix + inner_session_id
         self.work_dir = Path(work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self._launched = False
-        self._ducc_launched = False
+        self._claude_launched = False
 
     def __call__(self, capture, fixation, mail, task,
                  llm_model=None) -> FutureTensor:
@@ -127,7 +127,7 @@ class CodingAgentEngine:
             if pane is None:
                 return ("", Status.self_confidence_but_failed(0.3))
 
-            # Build prompt and query interactive ducc via
+            # Build prompt and query interactive Claude via
             # query_interactive_repl_coding_agent.  Its validate_notify
             # handles permission prompts, idle reminders, and output
             # validation — no manual polling needed.
@@ -181,7 +181,7 @@ class CodingAgentEngine:
             return None
 
     def _ensure_launched(self):
-        if self._launched and self._ducc_launched:
+        if self._launched and self._claude_launched:
             return
         try:
             server = libtmux.Server()
@@ -206,19 +206,19 @@ class CodingAgentEngine:
                     time.sleep(0.1)
                 self._launched = True
 
-            if not self._ducc_launched:
+            if not self._claude_launched:
                 pane.send_keys(
-                    "ducc --add-dir " + str(self.work_dir) +
+                    "claude --add-dir " + str(self.work_dir) +
                     " --allow-dangerously-skip-permissions"
                     " --permission-mode bypassPermissions",
                     enter=True,
                 )
-                time.sleep(4)  # wait for ducc to start
-                self._ducc_launched = True
+                time.sleep(4)  # wait for Claude to start
+                self._claude_launched = True
         except Exception:
             pass
 
 
-def make_engine_step(agent_type: str = "ducc", inner_session_id: str = "",
+def make_engine_step(agent_type: str = "claude", inner_session_id: str = "",
                      work_dir: str = "", launch_cmd: Optional[str] = None):
     return CodingAgentEngine(agent_type, inner_session_id, work_dir, launch_cmd)

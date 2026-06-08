@@ -1,8 +1,8 @@
 """
 Integration test: query_interactive_repl_coding_agent against interactive
-ducc (no --print) running in a persistent tmux session.
+Claude (no --print) running in a persistent tmux session.
 
-The function sends a chat message to ducc via tmux send-keys.  ducc
+The function sends a chat message to Claude via tmux send-keys.  Claude
 interprets the message, uses its Write tool to write the keystroke DSL
 command to the output file, and the function polls until content appears.
 """
@@ -32,7 +32,7 @@ def tmux_enter():
 
 
 def setup_session():
-    """Start bash, source env, launch interactive ducc (no --print)."""
+    """Start bash, source env, launch interactive Claude (no --print)."""
     subprocess.run(
         ["tmux", "kill-session", "-t", SESSION_NAME], check=False,
     )
@@ -50,7 +50,7 @@ def setup_session():
         time.sleep(0.1)
 
     tmux_send(
-        "ducc --add-dir /tmp --allow-dangerously-skip-permissions "
+        "claude --add-dir /tmp --allow-dangerously-skip-permissions "
         "--permission-mode bypassPermissions"
     ); tmux_enter()
     time.sleep(4)
@@ -65,7 +65,7 @@ def teardown_session():
 # ── test cases ───────────────────────────────────────────────────────────
 
 def _task_prompt(task: str, output_path: str) -> str:
-    """Build a prompt that makes ducc write to the output file via Write tool."""
+    """Build a prompt that makes Claude write to the output file via Write tool."""
     return (
         f"Terminal:\n"
         f"bash-3.2$ \n\n"
@@ -81,7 +81,7 @@ def _task_prompt(task: str, output_path: str) -> str:
 
 
 def test_echo_hello():
-    """Task: echo hello → ducc writes keystroke to output file."""
+    """Task: echo hello → Claude writes keystroke to output file."""
     t0 = time.time()
     raw = query_interactive_repl_coding_agent(
         online_tmux_session_name=SESSION_NAME,
@@ -98,7 +98,7 @@ def test_echo_hello():
 
 
 def test_ls_command():
-    """Task: list files → ducc writes tmux-text ls -la."""
+    """Task: list files → Claude writes tmux-text ls -la."""
     t0 = time.time()
     raw = query_interactive_repl_coding_agent(
         online_tmux_session_name=SESSION_NAME,
@@ -115,7 +115,7 @@ def test_ls_command():
 
 
 def test_ctrl_key():
-    """Task: interrupt → ducc writes tmux-ctrl C-c."""
+    """Task: interrupt → Claude writes tmux-ctrl C-c."""
     t0 = time.time()
     raw = query_interactive_repl_coding_agent(
         online_tmux_session_name=SESSION_NAME,

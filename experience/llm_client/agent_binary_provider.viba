@@ -18,11 +18,11 @@ AgentBinaryProvider :=
         <- { return path to settings.json or None if not found }
 
 ClaudeCodeProvider :=
-    # Locate Claude Code (ducc) binary from Comate extension
+    # Locate Claude Code binary from Comate extension
     AgentBinaryProvider
     <- ()
     # inline
-    <- $cli_path { glob ~/.comate/extensions/baidu.baidu-cc-*/resources/native-binary/bin/ducc }
+    <- $cli_path { glob ~/.comate/extensions/baidu.baidu-cc-*/resources/native-binary/bin/claude }
     <- $settings_path { glob ~/.comate/extensions/baidu.baidu-cc-*/resources/settings.json }
 
 CustomAgentProvider :=
@@ -50,7 +50,7 @@ get_default_provider :=
     <- { return ClaudeCodeProvider if comate extension found, else EnvironmentAgentProvider }
 
 # Backward compatibility aliases
-DuccProvider := AgentBinaryProvider
-ComateDuccProvider := ClaudeCodeProvider
-CustomDuccProvider := CustomAgentProvider
-EnvironmentDuccProvider := EnvironmentAgentProvider
+ClaudeProvider := AgentBinaryProvider
+ComateClaudeProvider := ClaudeCodeProvider
+CustomClaudeProvider := CustomAgentProvider
+EnvironmentClaudeProvider := EnvironmentAgentProvider

@@ -27,9 +27,9 @@ AgentConfigFactory :=
         <- $permission_mode str # default "acceptEdits"
         <- $model str # Optional, model name
         <- $agent_provider AgentBinaryProvider # Optional, agent binary provider
-        <- $ducc_provider AgentBinaryProvider # Optional, deprecated backward compatibility
+        <- $claude_provider AgentBinaryProvider # Optional, deprecated backward compatibility
         # inline
-        <- $provider { use agent_provider or ducc_provider or get_default_provider() }
+        <- $provider { use agent_provider or claude_provider or get_default_provider() }
         <- $cli_path { provider.get_cli_path() }
         <- $settings_path { provider.get_settings_path() or "{}" for external API }
         <- $config { load from ~/.experience.json }
@@ -40,9 +40,9 @@ AgentConfigFactory :=
         TmuxCcConfig
         <- $model str # Optional, model name
         <- $agent_provider AgentBinaryProvider # Optional, agent binary provider
-        <- $ducc_provider AgentBinaryProvider # Optional, deprecated backward compatibility
+        <- $claude_provider AgentBinaryProvider # Optional, deprecated backward compatibility
         # inline
-        <- $provider { use agent_provider or ducc_provider or get_default_provider() }
+        <- $provider { use agent_provider or claude_provider or get_default_provider() }
         <- $cli_path { provider.get_cli_path() }
         <- $settings_path { provider.get_settings_path() }
         <- $config { load from ~/.experience.json and environment }
@@ -65,6 +65,6 @@ create_agent_config :=
     <- $permission_mode str # default "acceptEdits"
     <- $model str # Optional
     <- $agent_provider AgentBinaryProvider # Optional
-    <- $ducc_provider AgentBinaryProvider # Optional, deprecated
+    <- $claude_provider AgentBinaryProvider # Optional, deprecated
     # inline
     <- AgentConfigFactory.create_claude_agent_config

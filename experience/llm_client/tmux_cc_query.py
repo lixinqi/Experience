@@ -1,6 +1,6 @@
 """Tmux CC (Claude Coding) query interface.
 
-This module provides a clean interface for querying tmux_cc (ducc in interactive mode),
+This module provides a clean interface for querying tmux_cc (Claude in interactive mode),
 completely decoupled from implementation details through TmuxCcConfig.
 """
 
@@ -20,7 +20,7 @@ def tmux_cc_query(
     allowed_tools: str = "Read,Edit,Write",
     effort: str = "low",
 ) -> str:
-    """Query tmux_cc (ducc) with the given prompt in non-interactive mode.
+    """Query tmux_cc (Claude) with the given prompt in non-interactive mode.
     
     This is a simple synchronous interface for single tmux_cc queries,
     parallel to raw_llm_query() and coding_agent_query().
@@ -45,7 +45,7 @@ def tmux_cc_query(
     
     cli_path = config.get_cli_path()
     if cli_path is None:
-        raise RuntimeError("Cannot find tmux_cc (ducc) binary. Please configure properly.")
+        raise RuntimeError("Cannot find tmux_cc (Claude) binary. Please configure properly.")
     
     # Build command
     cmd = [

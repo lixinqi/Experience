@@ -1,7 +1,7 @@
 """Coding agent query interface.
 
 This module provides a clean interface for querying coding agents,
-completely decoupled from implementation details (ducc, settings, etc.).
+completely decoupled from implementation details (Claude, settings, etc.).
 """
 
 import asyncio
