@@ -1,0 +1,9 @@
+# execute_tmux.py
+
+main :=
+	void
+  <- ArgParse[$input TmuxActionSequence]
+  <- ArgParse[$tmux_session_name str]
+  # inline 
+  <- Import[design.viba]
+  

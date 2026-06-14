@@ -1,0 +1,10 @@
+# reenact_tmux.py
+
+main :=
+	void
+  <- ArgParse[$input.capture_stream TmuxCaptureStream.capture_stream]
+  <- ArgParse[$input.frame_time_ranges TmuxCaptureStream.frame_time_ranges]
+  <- ArgParse[$output TmuxActionSequence]
+  # inline 
+  <- Import[design.viba]
+ 

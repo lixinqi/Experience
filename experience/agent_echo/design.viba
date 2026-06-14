@@ -1,0 +1,21 @@
+
+TmuxCaptureStream := 
+	Object
+	* $capture_stream DirectoryOf[FutureTensor[$shape ($num_frames int,), $content ($tmux_capture str)]]
+  * $frame_time_range DirectoryOf[FutureTensor[$shape ($num_frames int, 2), $content datatime]] # start and end
+
+TmuxActionSequence := DirectoryOf[FutureTensor[$key_stroke_dsl str]]
+
+capture_tmux :=
+	TmuxCaptureStream
+  <- $tmux_session_name str
+  # inline
+	<- {
+    capture one frame every 0.5 seconds
+  }
+
+reenact_tmux := TmuxActionSequence <- TmuxCaptureStream
+
+execute_tmux := void <- TmuxActionSequence <- $tmux_session_name str
+
+

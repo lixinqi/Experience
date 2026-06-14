@@ -1,9 +1,9 @@
 """
-test_engine_multistep: Multi-step CodingAgentEngine test.
+test_engine_multistep (MVP): Multi-step CodingAgentEngine test.
 
 Task requires two steps: echo MARKER_ONE, then echo MARKER_TWO.
-Validator requires both markers. Agent must use logical_views to see
-what was done in previous iterations.
+Validator requires both markers.  No fixation, no foveals — just
+capture → think → act → repeat.
 """
 
 import os
@@ -53,7 +53,7 @@ def _print_terminal():
 
 def main():
     print("=" * 60)
-    print("ReAct Engine: Multi-step Coding Agent Test")
+    print("ReAct Engine: Multi-step Coding Agent Test (MVP)")
     print("=" * 60)
 
     task = "Step 1: echo MARKER_ONE, Enter. Step 2: echo MARKER_TWO, Enter."

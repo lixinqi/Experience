@@ -1,15 +1,15 @@
-"""Shared types for the react package."""
+"""Shared types for the react package (MVP)."""
 
 import json
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional, Tuple, Awaitable
+from typing import Callable, List, Optional, Tuple
 
-from experience.future_tensor.future_tensor import FutureTensor
 
+# ── KeystrokeNode (deprecated in MVP — kept for legacy engine compat) ──
 
 @dataclass
 class KeystrokeNode:
-    """Recursive tree of keystrokes with predicted fixation points."""
+    """Recursive tree of keystrokes (legacy — not used in MVP)."""
     current_fixation: Tuple[int, int] = (0, 0)
     current_foveal: str = ""
     keystrokes: str = ""
@@ -19,26 +19,20 @@ class KeystrokeNode:
     comments: str = ""
 
     def serialize(self) -> str:
-        """Serialize this KeystrokeNode tree to JSON string."""
-        def _to_dict(n):
-            if n is None:
-                return None
-            d = {
-                "current_fixation": list(n.current_fixation),
-                "current_foveal": n.current_foveal,
-                "keystrokes": n.keystrokes,
-                "predicted_next_fixation": list(n.predicted_next_fixation),
-                "predicted_next_foveal": n.predicted_next_foveal,
-                "children": [_to_dict(c) for c in n.children],
-            }
-            if n.comments:
-                d["comments"] = n.comments
-            return d
-        return json.dumps(_to_dict(self))
+        d = {
+            "current_fixation": list(self.current_fixation),
+            "current_foveal": self.current_foveal,
+            "keystrokes": self.keystrokes,
+            "predicted_next_fixation": list(self.predicted_next_fixation),
+            "predicted_next_foveal": self.predicted_next_foveal,
+            "children": [json.loads(c.serialize()) for c in self.children],
+        }
+        if self.comments:
+            d["comments"] = self.comments
+        return json.dumps(d)
 
     @staticmethod
     def deserialize(text: str) -> Optional[dict]:
-        """Deserialize JSON string to KeystrokeNode dict."""
         if not text or not text.strip():
             return None
         try:
@@ -47,41 +41,19 @@ class KeystrokeNode:
             return None
 
 
+# ── MVP types ──────────────────────────────────────────────────────────
+
 @dataclass
 class ReactConfig:
     """Configuration for the ReAct loop."""
     max_iterations: int = 20
     settle_delay: float = 0.3
-    mismatch_tolerance: int = 3
-    fixation_start: Tuple[int, int] = (0, 0)
     step_budget: int = 8
     llm_model: Optional[str] = None  # override ANTHROPIC_MODEL env var
 
 
-# engine_step signature per engine_step.viba:
-#   $output KeystrokeNode
-#   <- $capture FutureTensor
-#   <- $fixation FutureTensor
-#   <- $mail FutureTensor
-#   <- $coordinates list[int]
-#   <- $task str
-#
-# CodingAgentEngine.__call__ returns a FutureTensor (future op):
-#   FutureTensor[Awaitable[$output KeystrokeNode] <- $coordinates <- $prompt]
-#   <- $task * $mail * $fixation * $capture
-EngineStepFn = Callable[
-    [FutureTensor, FutureTensor, FutureTensor, str],
-    FutureTensor,
-]
+# engine_step: (capture: str, task: str) -> list[str]
+# Returns a list of keystroke DSL statements (tmux-text / tmux-ctrl).
+EngineStepFn = Callable[[str, str], List[str]]
 
 ValidatorFn = Callable[[str, int], bool]
-
-
-def ft_read(ft: FutureTensor, coordinates: List[int]) -> str:
-    """Read materialized string content from a FutureTensor at coordinates."""
-    _, filepath = ft.ft_get_materialized_value(coordinates)
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            return f.read()
-    except (FileNotFoundError, OSError):
-        return ""

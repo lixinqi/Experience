@@ -1,0 +1,10 @@
+# capture_tmux.py
+
+main :=
+	void
+  <- ArgParse[$tmux_session_name str]
+  <- ArgParse[$output.capture_stream TmuxCaptureStream.capture_stream]
+  <- ArgParse[$output.frame_time_ranges TmuxCaptureStream.frame_time_ranges]
+  # inline 
+  <- Import[design.viba]
+  
