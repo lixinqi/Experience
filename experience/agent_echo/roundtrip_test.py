@@ -14,7 +14,10 @@ import json
 import threading
 from pathlib import Path
 
+import sympy
 import libtmux
+from experience.future_tensor.future_tensor import FutureTensor
+from experience.agent_echo.validate_future_tensor_dir import validate_future_tensor_dir
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\[.*?[\x40-\x7e]")
 
@@ -221,7 +224,28 @@ def streams_equal(frames_a: list[str], frames_b: list[str]) -> bool:
 
 # ── main test ──────────────────────────────────────────────────────────────
 
-def _run_phases(command: str, session_a: str, session_b: str, tmpdir: Path) -> bool:
+def _store_as_ft(frames: list[str], ft_dir: Path) -> list[str]:
+    """Store captured frames as a FutureTensor, validate, return errors."""
+    ft_dir.mkdir(parents=True, exist_ok=True)
+    async def _noop(coords, trajactory):
+        return ("", type("S", (), {"is_confidence": False})())
+    ft = FutureTensor(str(ft_dir), _noop, [sympy.Integer(len(frames))])
+    for i, frame in enumerate(frames):
+        tmp = ft_dir / f"_tmp_{i}.txt"
+        tmp.write_text(frame)
+        ft.ft_reset_materialized_value([i], 1.0, str(tmp), symlink=False)
+        tmp.unlink()
+    logical_view = ft.ft_describe_logical_view()
+    meta = {"ft_relative_to": ft.ft_relative_to, "ft_tensor_uid": ft.ft_tensor_uid,
+            "ft_capacity_shape": ft.ft_capacity_shape, "logical_view": logical_view}
+    (ft_dir / "ft_meta.json").write_text(json.dumps(meta, indent=2))
+    return validate_future_tensor_dir(ft_dir)
+
+
+def _run_phases(command: str, session_a: str, session_b: str,
+                tmpdir: Path) -> tuple[bool, list[str]]:
+    """Run capture→reenact→execute→capture.  Returns (streams_match, ft_errors)."""
+    ft_errors: list[str] = []
     create_session(session_a)
     def _type():
         type_text(session_a, command, char_delay=0.08)
@@ -230,15 +254,17 @@ def _run_phases(command: str, session_a: str, session_b: str, tmpdir: Path) -> b
         time.sleep(0.5)
     frames_a = capture_while(session_a, _type, interval=0.1, settle_after=1.0)
     if len(frames_a) < 3:
-        return False
+        return False, ft_errors
+    ft_errors.extend(_store_as_ft(frames_a, tmpdir / "capture_A"))
     statements = frames_to_keystrokes(frames_a)
     if not statements:
-        return False
+        return False, ft_errors
     create_session(session_b)
     def _exec():
         execute_statements(statements, session_b, char_delay=0.08)
     frames_b = capture_while(session_b, _exec, interval=0.1, settle_after=1.0)
-    return streams_equal(frames_a, frames_b)
+    ft_errors.extend(_store_as_ft(frames_b, tmpdir / "capture_B"))
+    return streams_equal(frames_a, frames_b), ft_errors
 
 
 def _print_phase(phase: str, frames: list[str], statements: list[str] | None = None):
@@ -254,10 +280,14 @@ def _print_phase(phase: str, frames: list[str], statements: list[str] | None = N
 
 def test_roundtrip(command: str = "echo hello world", max_attempts: int = 5) -> bool:
     session_a, session_b = "echo_rt_A", "echo_rt_B"
+    tmpdir = Path("/tmp/echo_roundtrip_test")
     for attempt in range(1, max_attempts + 1):
         print(f"\n{'='*60}\nAttempt {attempt}/{max_attempts}: roundtrip '{command}'\n{'='*60}")
         try:
-            if _run_phases(command, session_a, session_b, Path("/tmp/echo_roundtrip_test")):
+            ok, ft_errors = _run_phases(command, session_a, session_b, tmpdir)
+            if ft_errors:
+                print(f"  FT validation errors: {ft_errors}")
+            if ok:
                 print("\n  ✓ ROUNDTRIP PASSED — streams match!")
                 return True
             print("\n  ✗ Streams differ")
