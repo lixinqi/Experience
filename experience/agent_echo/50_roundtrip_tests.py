@@ -73,47 +73,50 @@ COMMANDS = [
 ]
 
 
+def _capture_and_reenact(session_name: str, cmd: str) -> tuple[list[str], list[str]]:
+    """Type a command in a fresh session, capture frames, reenact to keystrokes."""
+    create_session(session_name)
+    def _type():
+        type_text(session_name, cmd, char_delay=0.08)
+        time.sleep(0.1)
+        send_char(session_name, "\n")
+        time.sleep(0.5)
+    frames = capture_while(session_name, _type, interval=0.1, settle_after=1.0)
+    return frames, frames_to_keystrokes(frames)
+
+
+def _execute_and_capture(session_name: str, statements: list[str]) -> list[str]:
+    """Replay keystrokes in a fresh session and capture frames."""
+    create_session(session_name)
+    def _exec():
+        execute_statements(statements, session_name, char_delay=0.08)
+    return capture_while(session_name, _exec, interval=0.1, settle_after=1.0)
+
+
+def _run_one(i: int, cmd: str) -> tuple[bool, str]:
+    session_a, session_b = f"rt_A{i}", f"rt_B{i}"
+    try:
+        frames_a, statements = _capture_and_reenact(session_a, cmd)
+        frames_b = _execute_and_capture(session_b, statements)
+        ok = streams_equal(frames_a, frames_b)
+        return ok, str(statements) if not ok else ""
+    except Exception as e:
+        return False, str(e)
+    finally:
+        kill_session(session_a)
+        kill_session(session_b)
+
+
 def run_all() -> tuple[int, int]:
-    passed = 0
-    failed = 0
-
+    passed, failed = 0, 0
     for i, cmd in enumerate(COMMANDS, 1):
-        session_a = f"rt_A{i}"
-        session_b = f"rt_B{i}"
-        try:
-            create_session(session_a)
-
-            def _type():
-                type_text(session_a, cmd, char_delay=0.08)
-                time.sleep(0.1)
-                send_char(session_a, "\n")
-                time.sleep(0.5)
-
-            frames_a = capture_while(session_a, _type, interval=0.1, settle_after=1.0)
-            statements = frames_to_keystrokes(frames_a)
-
-            create_session(session_b)
-
-            def _exec():
-                execute_statements(statements, session_b, char_delay=0.08)
-
-            frames_b = capture_while(session_b, _exec, interval=0.1, settle_after=1.0)
-
-            if streams_equal(frames_a, frames_b):
-                passed += 1
-                print(f"  [{i:2d}/50] ✓  {cmd!r}", flush=True)
-            else:
-                failed += 1
-                print(f"  [{i:2d}/50] ✗  {cmd!r}  — streams differ", flush=True)
-                # Show the statements
-                print(f"         statements: {statements!r}", flush=True)
-        except Exception as e:
+        ok, detail = _run_one(i, cmd)
+        if ok:
+            passed += 1
+            print(f"  [{i:2d}/50] ✓  {cmd!r}", flush=True)
+        else:
             failed += 1
-            print(f"  [{i:2d}/50] ✗  {cmd!r}  — {e}", flush=True)
-        finally:
-            kill_session(session_a)
-            kill_session(session_b)
-
+            print(f"  [{i:2d}/50] ✗  {cmd!r}  — {detail}", flush=True)
     return passed, failed
 
 
