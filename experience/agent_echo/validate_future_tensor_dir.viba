@@ -1,0 +1,11 @@
+main :=
+  Optional[Stdout[$validation_error str]]
+  <- ArgParse[$dir Directory[FutureTensor]]
+  # inline
+  <- Import[experience/future_tensor/future_tensor.viba]
+  <- {
+    check shape schema and shape capcity.
+    for each incremental symbolic tensor directory $sym_dir:
+    	1. check meta data under $sym_dir.
+    	2. check storage under $sym_dir/storage.
+  }
